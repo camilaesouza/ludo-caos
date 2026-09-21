@@ -1,0 +1,22 @@
+# Nuxt
+.nuxt/
+.output/
+.data/
+dist/
+node_modules/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Cloudflare
+.wrangler/
