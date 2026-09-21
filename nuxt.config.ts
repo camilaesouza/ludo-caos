@@ -5,6 +5,13 @@ export default defineNuxtConfig({
 
   ssr: false,
 
+  // Força saída 100% estática mesmo quando o build roda dentro do Cloudflare,
+  // onde o Nitro detectaria o ambiente e tentaria gerar um Worker (sem sentido
+  // aqui, já que não existe nenhum código de servidor com ssr: false).
+  nitro: {
+    preset: 'static'
+  },
+
   modules: ['@nuxtjs/tailwindcss'],
 
   css: ['~/assets/css/main.css'],
