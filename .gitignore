@@ -5,6 +5,10 @@
 dist/
 node_modules/
 
+# npm (lockfile removed: npm ci chokes on an optional-peerDependency
+# version mismatch from @nuxt/cli's @bomb.sh/tab; plain npm install works)
+package-lock.json
+
 # Env
 .env
 .env.*
