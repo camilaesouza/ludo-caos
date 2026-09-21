@@ -1,0 +1,8 @@
+{
+  "name": "ludo-caos",
+  "compatibility_date": "2024-11-01",
+  "assets": {
+    "directory": ".output/public",
+    "not_found_handling": "single-page-application"
+  }
+}
