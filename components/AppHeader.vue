@@ -6,7 +6,7 @@ const menuAberto = ref(false)
 <template>
   <header class="sticky top-0 z-30 flex items-center justify-between bg-roxo-700 px-4 py-3 text-white shadow-md">
     <div class="flex items-center gap-2">
-      <img src="/assets/img/LogoLudo.png" alt="LudoCaosLogo" width="35">
+      <img src="/img/LogoLudo.png" alt="LudoCaosLogo" width="35">
       <span class="text-lg font-extrabold tracking-tight">LudoCaos</span>
     </div>
 
