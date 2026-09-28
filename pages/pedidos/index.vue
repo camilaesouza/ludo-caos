@@ -7,6 +7,11 @@ const numero = ref('')
 const clienteNome = ref('')
 const salvando = ref(false)
 const erro = ref('')
+const busca = ref('')
+
+const pedidosFiltrados = computed(() =>
+  pedidosAbertos.value.filter((p) => pedidoCombinaBusca(p, busca.value))
+)
 
 function abrirNovo() {
   numero.value = ''
@@ -41,21 +46,34 @@ function tempoAberto(createdAt: number) {
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-extrabold text-roxo-800">Pedidos</h1>
-      <button
-        class="rounded-xl bg-amarelo-400 px-4 py-2 text-sm font-bold text-roxo-800 shadow-sm"
-        @click="abrirNovo"
-      >
-        + Novo
-      </button>
+      <div class="flex items-center gap-2">
+        <NuxtLink
+          to="/pedidos/encerrados"
+          class="rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm font-bold text-roxo-600 shadow-sm"
+        >
+          Encerrados
+        </NuxtLink>
+        <button
+          class="rounded-xl bg-amarelo-400 px-4 py-2 text-sm font-bold text-roxo-800 shadow-sm"
+          @click="abrirNovo"
+        >
+          + Novo
+        </button>
+      </div>
     </div>
+
+    <UiCampoBusca v-if="pedidosAbertos.length" v-model="busca" placeholder="Buscar por número ou cliente" />
 
     <p v-if="!pedidosAbertos.length" class="py-10 text-center text-sm text-roxo-300">
       Nenhum pedido aberto no momento.
     </p>
+    <p v-else-if="!pedidosFiltrados.length" class="py-10 text-center text-sm text-roxo-300">
+      Nenhum pedido aberto encontrado para “{{ busca }}”.
+    </p>
 
     <div class="grid grid-cols-2 gap-3">
       <NuxtLink
-        v-for="p in pedidosAbertos"
+        v-for="p in pedidosFiltrados"
         :key="p.id"
         :to="`/pedidos/${p.id}`"
         class="rounded-2xl bg-white p-4 shadow-sm"

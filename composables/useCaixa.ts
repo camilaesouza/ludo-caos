@@ -1,32 +1,38 @@
 import { collection, doc, setDoc, deleteDoc, query, orderBy, getDocs } from 'firebase/firestore'
 import type { FechamentoCaixa, FormaPagamento } from '~/types'
 
-function limitesDoDia(dataISO: string) {
-  const inicio = new Date(`${dataISO}T00:00:00`).getTime()
-  const fim = new Date(`${dataISO}T23:59:59.999`).getTime()
-  return { inicio, fim }
-}
-
 export function useCaixa() {
   const { $db } = useNuxtApp()
   const { user } = useAuth()
   const { buscarFechadosEntre } = usePedidos()
   const { buscarEntreDatas } = useGastos()
+  const { produtos } = useProdutos()
 
-  async function resumoDoDia(dataISO: string) {
-    const { inicio, fim } = limitesDoDia(dataISO)
-    const pedidos = await buscarFechadosEntre(inicio, fim)
-    const gastos = await buscarEntreDatas(dataISO, dataISO)
+  async function resumoDoPeriodo(inicioISO: string, fimISO: string) {
+    const { inicio, fim } = limitesDoPeriodo(inicioISO, fimISO)
+    const [pedidos, gastos] = await Promise.all([
+      buscarFechadosEntre(inicio, fim),
+      buscarEntreDatas(inicioISO, fimISO)
+    ])
 
     const formasPagamento: Record<FormaPagamento, number> = {
       dinheiro: 0,
+      credito: 0,
+      debito: 0,
       cartao: 0,
       pix: 0
     }
 
+    const taxasPorForma: Partial<Record<FormaPagamento, number>> = {}
+
     let totalVendas = 0
+    let totalTaxas = 0
     for (const p of pedidos) {
       totalVendas += p.total
+      totalTaxas += p.valorTaxa || 0
+      if (p.formaPagamento && p.valorTaxa) {
+        taxasPorForma[p.formaPagamento] = (taxasPorForma[p.formaPagamento] || 0) + p.valorTaxa
+      }
       if (p.formaPagamento) {
         formasPagamento[p.formaPagamento] += p.total
       }
@@ -34,27 +40,37 @@ export function useCaixa() {
 
     const totalGastos = gastos.reduce((soma, g) => soma + g.valor, 0)
 
+    const vendasPorCategoria = agruparPorCategoria(
+      pedidos,
+      (id) => produtos.value.find((p) => p.id === id)?.categoria
+    )
+
     return {
       pedidos,
       gastos,
+      vendasPorCategoria,
       totalVendas,
       totalPedidos: pedidos.length,
       totalGastos,
-      totalLiquido: totalVendas - totalGastos,
-      formasPagamento
+      totalTaxas: arredondarCentavos(totalTaxas),
+      totalLiquido: arredondarCentavos(totalVendas - totalTaxas - totalGastos),
+      formasPagamento,
+      taxasPorForma
     }
   }
 
   async function registrarFechamento(dataISO: string, observacoes = '') {
-    const resumo = await resumoDoDia(dataISO)
+    const resumo = await resumoDoPeriodo(dataISO, dataISO)
     // Usa a data como ID do documento: fechar de novo no mesmo dia substitui o registro anterior.
     await setDoc(doc($db as any, 'fechamentosCaixa', dataISO), {
       data: dataISO,
       totalVendas: resumo.totalVendas,
       totalPedidos: resumo.totalPedidos,
       totalGastos: resumo.totalGastos,
+      totalTaxas: resumo.totalTaxas,
       totalLiquido: resumo.totalLiquido,
       formasPagamento: resumo.formasPagamento,
+      vendasPorCategoria: resumo.vendasPorCategoria,
       observacoes,
       createdAt: Date.now(),
       fechadoPor: user.value?.email || ''
@@ -72,5 +88,5 @@ export function useCaixa() {
     await deleteDoc(doc($db as any, 'fechamentosCaixa', id))
   }
 
-  return { resumoDoDia, registrarFechamento, historicoFechamentos, removerFechamento }
+  return { resumoDoPeriodo, registrarFechamento, historicoFechamentos, removerFechamento }
 }

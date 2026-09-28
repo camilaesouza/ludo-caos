@@ -28,7 +28,9 @@ export function useProdutos() {
     })
   }
 
-  async function criarProduto(data: { nome: string; preco: number; categoria: string }) {
+  async function criarProduto(
+    data: Pick<Produto, 'nome' | 'preco' | 'precoEvento' | 'categoria' | 'unidade' | 'estoque'>
+  ) {
     await addDoc(collection($db as any, 'produtos'), {
       ...data,
       ativo: true,

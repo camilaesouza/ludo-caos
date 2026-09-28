@@ -1,25 +1,23 @@
 <script setup lang="ts">
-import type { Pedido } from '~/types'
+const { resumoDoPeriodo, registrarFechamento, historicoFechamentos, removerFechamento } = useCaixa()
+const { subscribe: subscribeProdutos } = useProdutos()
+subscribeProdutos()
 
-const { resumoDoDia, registrarFechamento, historicoFechamentos, removerFechamento } = useCaixa()
-
-function hojeISO() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-const data = ref(hojeISO())
+const inicio = ref(hojeLocalISO())
+const fim = ref(hojeLocalISO())
+// O fechamento é registrado por dia; com um período maior, a tela só mostra o resumo.
+const umDia = computed(() => inicio.value === fim.value)
 const carregando = ref(true)
 const registrando = ref(false)
-const resumo = ref<Awaited<ReturnType<typeof resumoDoDia>> | null>(null)
+const resumo = ref<Awaited<ReturnType<typeof resumoDoPeriodo>> | null>(null)
 const historico = ref<Awaited<ReturnType<typeof historicoFechamentos>>>([])
 const observacoes = ref('')
 const modalConfirmarAberto = ref(false)
 const fechamentoParaExcluir = ref<{ id: string; data: string } | null>(null)
-const pedidoSelecionado = ref<Pedido | null>(null)
 
 async function carregar() {
   carregando.value = true
-  resumo.value = await resumoDoDia(data.value)
+  resumo.value = await resumoDoPeriodo(inicio.value, fim.value)
   carregando.value = false
 }
 
@@ -39,7 +37,7 @@ async function executarFechamento() {
   modalConfirmarAberto.value = false
   registrando.value = true
   try {
-    await registrarFechamento(data.value, observacoes.value)
+    await registrarFechamento(inicio.value, observacoes.value)
     observacoes.value = ''
     await carregarHistorico()
   } finally {
@@ -54,32 +52,30 @@ async function confirmarExclusaoFechamento() {
   await carregarHistorico()
 }
 
-watch(data, carregar)
+watch([inicio, fim], carregar)
 onMounted(() => {
   carregar()
   carregarHistorico()
 })
 
-const jaFechado = computed(() => historico.value.some((f) => f.data === data.value))
+const jaFechado = computed(() => umDia.value && historico.value.some((f) => f.data === inicio.value))
+const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
 </script>
 
 <template>
   <div class="space-y-5">
-    <div class="flex items-center justify-between">
+    <div class="space-y-3">
       <h1 class="text-xl font-extrabold text-roxo-800">Fechamento de caixa</h1>
-      <input
-        v-model="data"
-        type="date"
-        class="rounded-xl border border-roxo-100 px-3 py-2 text-sm text-roxo-700"
-      />
+      <UiFiltroPeriodo v-model:inicio="inicio" v-model:fim="fim" />
     </div>
 
     <div v-if="carregando" class="py-10 text-center text-sm text-roxo-300">Carregando...</div>
 
     <template v-else-if="resumo">
       <div class="grid grid-cols-2 gap-3">
-        <UiStatTile label="Líquido do dia" :value="formatarMoeda(resumo.totalLiquido)" destaque />
+        <UiStatTile class="col-span-2" :label="`Líquido ${sufixo}`" :value="formatarMoeda(resumo.totalLiquido)" destaque />
         <UiStatTile label="Em pedidos" :value="formatarMoeda(resumo.totalVendas)" />
+        <UiStatTile label="Taxas de cartão" :value="formatarMoeda(resumo.totalTaxas)" />
         <UiStatTile label="Gastos" :value="formatarMoeda(resumo.totalGastos)" />
         <UiStatTile label="Pedidos fechados" :value="String(resumo.totalPedidos)" />
       </div>
@@ -87,40 +83,65 @@ const jaFechado = computed(() => historico.value.some((f) => f.data === data.val
       <div class="rounded-2xl bg-white p-4 shadow-sm">
         <h2 class="mb-3 text-sm font-bold text-roxo-700">Por forma de pagamento</h2>
         <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-roxo-500">Dinheiro</span><span class="font-bold text-roxo-800">{{ formatarMoeda(resumo.formasPagamento.dinheiro) }}</span></div>
-          <div class="flex justify-between"><span class="text-roxo-500">Cartão</span><span class="font-bold text-roxo-800">{{ formatarMoeda(resumo.formasPagamento.cartao) }}</span></div>
-          <div class="flex justify-between"><span class="text-roxo-500">Pix</span><span class="font-bold text-roxo-800">{{ formatarMoeda(resumo.formasPagamento.pix) }}</span></div>
+          <div v-for="f in FORMAS_PAGAMENTO" :key="f.valor" class="flex justify-between">
+            <span class="text-roxo-500">{{ f.rotulo }}</span>
+            <span class="text-right">
+              <span class="font-bold text-roxo-800">{{ formatarMoeda(resumo.formasPagamento[f.valor] || 0) }}</span>
+              <span v-if="resumo.taxasPorForma[f.valor]" class="block text-[11px] text-red-500">
+                taxa -{{ formatarMoeda(resumo.taxasPorForma[f.valor]!) }}
+              </span>
+            </span>
+          </div>
+          <div v-if="resumo.formasPagamento.cartao" class="flex justify-between">
+            <span class="text-roxo-500">Cartão (sem tipo)</span>
+            <span class="font-bold text-roxo-800">{{ formatarMoeda(resumo.formasPagamento.cartao) }}</span>
+          </div>
         </div>
       </div>
 
       <div class="rounded-2xl bg-white p-4 shadow-sm">
-        <h2 class="mb-3 text-sm font-bold text-roxo-700">Pedidos do dia</h2>
-        <p v-if="!resumo.pedidos.length" class="text-sm text-roxo-300">Nenhum pedido fechado nessa data.</p>
-        <ul v-else class="divide-y divide-roxo-50">
-          <li v-for="p in resumo.pedidos" :key="p.id">
-            <button class="flex w-full items-center justify-between py-2 text-left text-sm" @click="pedidoSelecionado = p">
-              <span class="text-roxo-700">
-                {{ p.numero ? `#${p.numero}` : p.clienteNome || 'Pedido' }}
-                <span v-if="p.fechadoPor" class="block text-[10px] text-roxo-300">fechado por {{ nomeCurto(p.fechadoPor) }}</span>
-              </span>
-              <span class="font-bold text-roxo-800">{{ formatarMoeda(p.total) }}</span>
-            </button>
-          </li>
-        </ul>
+        <h2 class="mb-3 text-sm font-bold text-roxo-700">Produtos vendidos</h2>
+        <p v-if="!resumo.vendasPorCategoria.length" class="text-sm text-roxo-300">Nenhum pedido fechado nesse período.</p>
+        <div v-else class="space-y-4">
+          <div v-for="c in resumo.vendasPorCategoria" :key="c.categoria">
+            <div class="mb-1 flex items-center justify-between border-b border-roxo-100 pb-1">
+              <span class="text-xs font-bold uppercase tracking-wide text-roxo-400">{{ c.categoria }}</span>
+              <span class="text-xs font-bold text-roxo-500">{{ formatarMoeda(c.total) }}</span>
+            </div>
+            <ul class="divide-y divide-roxo-50">
+              <li v-for="prod in c.produtos" :key="prod.chave" class="flex items-center justify-between py-2 text-sm">
+                <span class="text-roxo-700">
+                  <span class="font-bold">{{ formatarQuantidade(prod.quantidade, prod.unidade) }}</span>
+                  {{ prod.nome }}
+                  <span v-if="prod.tipoPreco === 'evento'" class="ml-1 rounded bg-amarelo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amarelo-700">evento</span>
+                </span>
+                <span class="font-bold text-roxo-800">{{ formatarMoeda(prod.total) }}</span>
+              </li>
+            </ul>
+          </div>
+        </div>
       </div>
 
       <div class="rounded-2xl bg-white p-4 shadow-sm">
-        <h2 class="mb-3 text-sm font-bold text-roxo-700">Gastos do dia</h2>
-        <p v-if="!resumo.gastos.length" class="text-sm text-roxo-300">Nenhum gasto registrado nessa data.</p>
+        <h2 class="mb-3 text-sm font-bold text-roxo-700">Gastos {{ sufixo }}</h2>
+        <p v-if="!resumo.gastos.length" class="text-sm text-roxo-300">Nenhum gasto registrado nesse período.</p>
         <ul v-else class="divide-y divide-roxo-50">
           <li v-for="g in resumo.gastos" :key="g.id" class="flex items-center justify-between py-2 text-sm">
-            <span class="text-roxo-700">{{ g.nome }}</span>
+            <span class="text-roxo-700">
+              {{ g.nome }}
+              <span v-if="g.totalParcelas" class="text-[11px] text-roxo-400">{{ g.parcela }}/{{ g.totalParcelas }}</span>
+              <span v-if="!umDia" class="block text-[10px] text-roxo-300">{{ formatarDataBR(g.data) }}</span>
+            </span>
             <span class="font-bold text-red-500">-{{ formatarMoeda(g.valor) }}</span>
           </li>
         </ul>
       </div>
 
-      <div class="rounded-2xl bg-white p-4 shadow-sm">
+      <div v-if="!umDia" class="rounded-2xl border border-dashed border-roxo-200 p-4 text-center text-xs text-roxo-400">
+        O fechamento é registrado por dia. Selecione um único dia para registrar.
+      </div>
+
+      <div v-else class="rounded-2xl bg-white p-4 shadow-sm">
         <h2 class="mb-2 text-sm font-bold text-roxo-700">Registrar fechamento</h2>
         <p v-if="jaFechado" class="mb-3 text-xs font-medium text-amarelo-600">
           Este dia já possui um fechamento registrado. Registrar de novo vai substituir os valores salvos.
@@ -174,28 +195,5 @@ const jaFechado = computed(() => historico.value.some((f) => f.data === data.val
       @confirmar="confirmarExclusaoFechamento"
       @fechar="fechamentoParaExcluir = null"
     />
-
-    <UiModal
-      v-if="pedidoSelecionado"
-      :titulo="pedidoSelecionado.numero ? `Pedido #${pedidoSelecionado.numero}` : 'Pedido'"
-      @fechar="pedidoSelecionado = null"
-    >
-      <p class="mb-1 text-sm text-roxo-500">{{ pedidoSelecionado.clienteNome || 'Sem nome' }}</p>
-      <p v-if="pedidoSelecionado.formaPagamento" class="mb-3 text-xs capitalize text-roxo-300">
-        Pago em {{ pedidoSelecionado.formaPagamento }}
-      </p>
-
-      <ul class="mb-3 divide-y divide-roxo-50">
-        <li v-for="item in pedidoSelecionado.itens" :key="item.produtoId" class="flex items-center justify-between py-2 text-sm">
-          <span class="text-roxo-700">{{ item.quantidade }}x {{ item.nome }}</span>
-          <span class="font-medium text-roxo-800">{{ formatarMoeda(item.preco * item.quantidade) }}</span>
-        </li>
-      </ul>
-
-      <div class="flex items-center justify-between border-t border-roxo-100 pt-3">
-        <span class="text-sm font-bold text-roxo-700">Total</span>
-        <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(pedidoSelecionado.total) }}</span>
-      </div>
-    </UiModal>
   </div>
 </template>
