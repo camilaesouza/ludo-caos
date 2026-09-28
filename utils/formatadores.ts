@@ -1,4 +1,4 @@
-import type { FormaPagamento, ItemPedido, UnidadeMedida } from '~/types'
+import type { FormaPagamento, ItemPedido, MedidaPorcao, Produto, UnidadeMedida } from '~/types'
 
 export function formatarMoeda(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -8,12 +8,37 @@ export function nomeCurto(email: string) {
   return email.split('@')[0]
 }
 
-export const UNIDADES: { valor: UnidadeMedida; rotulo: string }[] = [
-  { valor: 'un', rotulo: 'Unidade (un)' },
+// Medidas de peso/volume, usadas em produtos fracionados e no tamanho das porções.
+export const MEDIDAS: { valor: MedidaPorcao; rotulo: string }[] = [
   { valor: 'kg', rotulo: 'Quilograma (kg)' },
   { valor: 'g', rotulo: 'Grama (g)' },
-  { valor: 'l', rotulo: 'Litro (l)' }
+  { valor: 'l', rotulo: 'Litro (l)' },
+  { valor: 'ml', rotulo: 'Mililitro (ml)' }
 ]
+
+// Mostra quantidades de g/ml a partir de 1000 como kg/l (1000 g → 1 kg).
+export function formatarMedida(q: number, medida: MedidaPorcao) {
+  if (medida === 'g' && q >= 1000) return formatarQuantidade(q / 1000, 'kg')
+  if (medida === 'ml' && q >= 1000) return formatarQuantidade(q / 1000, 'l')
+  return formatarQuantidade(q, medida)
+}
+
+export function ehPorcao(p: Pick<Produto, 'conteudo' | 'unidadeConteudo'>) {
+  return !!p.conteudo && !!p.unidadeConteudo
+}
+
+// Nome com o tamanho da porção, ex: "Batata congelada (200 g)".
+export function nomeProduto(p: Pick<Produto, 'nome' | 'conteudo' | 'unidadeConteudo'>) {
+  return ehPorcao(p) ? `${p.nome} (${formatarMedida(p.conteudo!, p.unidadeConteudo!)})` : p.nome
+}
+
+// Estoque por extenso: "5 un · 1 kg" para porções, "2,5 kg" para fracionados.
+export function formatarEstoque(p: Pick<Produto, 'estoque' | 'unidade' | 'conteudo' | 'unidadeConteudo'>) {
+  if (typeof p.estoque !== 'number') return ''
+  const base = formatarQuantidade(p.estoque, p.unidade || 'un')
+  if (!ehPorcao(p) || p.estoque <= 0) return base
+  return `${base} · ${formatarMedida(p.estoque * p.conteudo!, p.unidadeConteudo!)}`
+}
 
 // Arredonda para evitar lixo de ponto flutuante (ex: 0.1 + 0.2) em quantidades fracionadas.
 export function arredondarQuantidade(q: number) {

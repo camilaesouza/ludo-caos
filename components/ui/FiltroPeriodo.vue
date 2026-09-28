@@ -9,15 +9,17 @@ const props = defineProps<{ atalhoInicial?: string }>()
 interface Atalho {
   id: string
   rotulo: string
+  rotuloCurto: string // usado no celular, para caber sem scroll lateral
   periodo: () => [string, string]
 }
 
 const ATALHOS: Atalho[] = [
-  { id: 'hoje', rotulo: 'Hoje', periodo: () => [hojeLocalISO(), hojeLocalISO()] },
-  { id: 'semana', rotulo: 'Essa semana', periodo: () => [inicioDaSemana(hojeLocalISO()), hojeLocalISO()] },
+  { id: 'hoje', rotulo: 'Hoje', rotuloCurto: 'Hoje', periodo: () => [hojeLocalISO(), hojeLocalISO()] },
+  { id: 'semana', rotulo: 'Essa semana', rotuloCurto: 'Semana', periodo: () => [inicioDaSemana(hojeLocalISO()), hojeLocalISO()] },
   {
     id: 'mes',
     rotulo: 'Este mês',
+    rotuloCurto: 'Mês',
     periodo: () => {
       const hoje = hojeLocalISO()
       return [`${hoje.slice(0, 7)}-01`, hoje]
@@ -63,21 +65,22 @@ function aoMudarFim(e: Event) {
 
 <template>
   <div class="space-y-2">
-    <div class="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+    <div class="flex rounded-xl bg-roxo-50 p-1">
       <button
         v-for="a in ATALHOS"
         :key="a.id"
         type="button"
-        class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold shadow-sm transition-colors"
-        :class="atalhoAtivo === a.id ? 'bg-amarelo-400 text-roxo-800' : 'bg-white text-roxo-400'"
+        class="min-w-0 flex-1 whitespace-nowrap rounded-lg px-1 py-2 text-[11px] font-bold transition-colors sm:text-xs"
+        :class="atalhoAtivo === a.id ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
         @click="escolher(a)"
       >
-        {{ a.rotulo }}
+        <span class="sm:hidden">{{ a.rotuloCurto }}</span>
+        <span class="hidden sm:inline">{{ a.rotulo }}</span>
       </button>
       <button
         type="button"
-        class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold shadow-sm transition-colors"
-        :class="personalizado ? 'bg-amarelo-400 text-roxo-800' : 'bg-white text-roxo-400'"
+        class="min-w-0 flex-[1.5] whitespace-nowrap rounded-lg px-1 py-2 text-[11px] font-bold transition-colors sm:text-xs"
+        :class="personalizado ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
         @click="atalhoAtivo = null"
       >
         Personalizado
@@ -85,21 +88,21 @@ function aoMudarFim(e: Event) {
     </div>
 
     <div v-if="personalizado" class="grid grid-cols-2 gap-2">
-      <label class="block">
+      <label class="block min-w-0">
         <span class="mb-1 block text-[11px] font-semibold text-roxo-400">De</span>
         <input
           :value="inicio"
           type="date"
-          class="w-full rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
+          class="w-full min-w-0 rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
           @change="aoMudarInicio"
         />
       </label>
-      <label class="block">
+      <label class="block min-w-0">
         <span class="mb-1 block text-[11px] font-semibold text-roxo-400">Até</span>
         <input
           :value="fim"
           type="date"
-          class="w-full rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
+          class="w-full min-w-0 rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
           @change="aoMudarFim"
         />
       </label>

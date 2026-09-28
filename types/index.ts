@@ -1,4 +1,5 @@
-export type UnidadeMedida = 'un' | 'kg' | 'g' | 'l'
+export type UnidadeMedida = 'un' | 'kg' | 'g' | 'l' | 'ml'
+export type MedidaPorcao = Exclude<UnidadeMedida, 'un'>
 export type TipoPreco = 'normal' | 'evento'
 
 export interface Produto {
@@ -8,6 +9,10 @@ export interface Produto {
   precoEvento?: number | null
   categoria: string
   unidade?: UnidadeMedida
+  // Produto vendido em porções/embalagens (ex: batata em porções de 200 g):
+  // unidade fica 'un', estoque e preço contam porções, e aqui vai o tamanho de cada uma.
+  conteudo?: number | null
+  unidadeConteudo?: MedidaPorcao | null
   // null/ausente = produto sem controle de estoque
   estoque?: number | null
   ativo: boolean

@@ -28,7 +28,7 @@ const avulsoValor = ref<number | null>(null)
 const adicionandoAvulso = ref(false)
 
 const produtosFiltrados = computed(() =>
-  ativos.value.filter((p) => p.nome.toLowerCase().includes(busca.value.toLowerCase()))
+  ativos.value.filter((p) => normalizarBusca(nomeProduto(p)).includes(normalizarBusca(busca.value)))
 )
 
 // Valor usado ao lançar produtos. Sempre volta para o normal ao abrir o modal.
@@ -56,7 +56,8 @@ async function lancar(produto: Produto, quantidade: number) {
   const tipo = tipoEfetivo(produto)
   await adicionarItem(id, {
     produtoId: produto.id,
-    nome: produto.nome,
+    // Porções entram com o tamanho no nome, ex: "Batata congelada (200 g)".
+    nome: nomeProduto(produto),
     preco: precoDe(produto, tipo),
     quantidade: arredondarQuantidade(quantidade),
     unidade: produto.unidade || 'un',
@@ -324,18 +325,18 @@ async function confirmarExclusao() {
             @click="selecionarProduto(p)"
           >
             <span>
-              <span class="block text-sm font-medium text-roxo-800">{{ p.nome }}</span>
+              <span class="block text-sm font-medium text-roxo-800">{{ nomeProduto(p) }}</span>
               <span
                 v-if="estoqueDe(p) !== null"
                 class="text-[11px]"
                 :class="estoqueDe(p)! <= 0 ? 'font-semibold text-red-500' : 'text-roxo-300'"
               >
-                Estoque: {{ formatarQuantidade(estoqueDe(p)!, p.unidade) }}
+                Estoque: {{ formatarEstoque(p) }}
               </span>
             </span>
             <span class="text-right">
               <span class="block text-sm font-bold text-roxo-600">
-                {{ formatarMoeda(precoDe(p, tipoEfetivo(p))) }}<span class="text-xs font-normal text-roxo-400">/{{ p.unidade || 'un' }}</span>
+                {{ formatarMoeda(precoDe(p, tipoEfetivo(p))) }}<span class="text-xs font-normal text-roxo-400">/{{ ehPorcao(p) ? 'porção' : p.unidade || 'un' }}</span>
               </span>
               <span v-if="tipoPreco === 'evento' && !p.precoEvento" class="text-[10px] text-roxo-300">sem valor evento</span>
             </span>

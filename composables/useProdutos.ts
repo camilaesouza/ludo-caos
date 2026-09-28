@@ -29,7 +29,10 @@ export function useProdutos() {
   }
 
   async function criarProduto(
-    data: Pick<Produto, 'nome' | 'preco' | 'precoEvento' | 'categoria' | 'unidade' | 'estoque'>
+    data: Pick<
+      Produto,
+      'nome' | 'preco' | 'precoEvento' | 'categoria' | 'unidade' | 'conteudo' | 'unidadeConteudo' | 'estoque'
+    >
   ) {
     await addDoc(collection($db as any, 'produtos'), {
       ...data,
