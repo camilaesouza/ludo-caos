@@ -8,10 +8,19 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
+  limit,
+  runTransaction,
   writeBatch,
   increment
 } from 'firebase/firestore'
-import type { Pedido, ItemPedido, FormaPagamento } from '~/types'
+import type { Pedido, ItemPedido, TipoDesconto } from '~/types'
+import type { PagamentoEscolhido } from './useTaxas'
+
+export interface FechamentoPedido extends PagamentoEscolhido {
+  descontoTipo: TipoDesconto | null
+  descontoInformado: number | null
+}
 
 const pedidosAbertos = () => useState<Pedido[]>('pedidosAbertos', () => [])
 const pedidosLoaded = () => useState<boolean>('pedidosLoaded', () => false)
@@ -20,17 +29,11 @@ function calcularTotal(itens: ItemPedido[]) {
   return itens.reduce((soma, item) => soma + item.preco * item.quantidade, 0)
 }
 
-function consumoDe(item: ItemPedido, delta: number) {
-  const consumo = new Map<string, number>()
-  if (item.controlaEstoque !== false) consumo.set(item.produtoId, delta)
-  return consumo
-}
-
 export function usePedidos() {
   const { $db } = useNuxtApp()
   const { user } = useAuth()
   const { produtos } = useProdutos()
-  const { calcularTaxa } = useTaxas()
+  const { taxas, calcularTaxa } = useTaxas()
 
   // Só mexe no estoque de produtos que existem e têm estoque controlado.
   function produtoControlaEstoque(produtoId: string) {
@@ -54,14 +57,56 @@ export function usePedidos() {
     })
   }
 
-  async function criarPedido(data: { numero: string; clienteNome: string }) {
-    const numeroLimpo = data.numero.trim()
-    if (numeroLimpo && abertos.value.some((p) => p.numero.trim() === numeroLimpo)) {
-      throw new Error(`Já existe um pedido aberto com o número ${numeroLimpo}.`)
-    }
+  // Maior número já usado nos pedidos mais recentes (números digitados à mão antes da numeração automática).
+  async function maiorNumeroExistente() {
+    const snap = await getDocs(query(collection($db as any, 'pedidos'), orderBy('createdAt', 'desc'), limit(300)))
+    return snap.docs.reduce((maior, d) => {
+      const n = Number(String(d.data().numero || '').trim().replace(/^#/, ''))
+      return Number.isInteger(n) && n > maior ? n : maior
+    }, 0)
+  }
 
+  const contador = () => doc($db as any, 'contadores', 'pedidos')
+
+  // Número seguinte ao `ultimo`, pulando os de pedidos abertos (ex: comandas digitadas à mão).
+  function seguinteLivre(ultimo: number) {
+    let numero = ultimo + 1
+    while (abertos.value.some((p) => p.numero.trim() === String(numero))) numero++
+    return numero
+  }
+
+  // Último número usado: o do contador ou, antes de ele existir, o maior número já lançado.
+  async function ultimoNumero() {
+    const snap = await getDoc(contador())
+    return snap.exists() ? Number(snap.data().ultimo) || 0 : await maiorNumeroExistente()
+  }
+
+  // Só mostra qual seria o próximo número, sem reservar (para preencher o campo).
+  async function sugerirNumero() {
+    return String(seguinteLivre(await ultimoNumero()))
+  }
+
+  // Reserva o próximo número num contador compartilhado, para dois aparelhos não pegarem o mesmo.
+  async function proximoNumero() {
+    const inicial = await ultimoNumero()
+    return runTransaction($db as any, async (tx) => {
+      const snap = await tx.get(contador())
+      const numero = seguinteLivre(snap.exists() ? Number(snap.data().ultimo) || 0 : inicial)
+      tx.set(contador(), { ultimo: numero })
+      return String(numero)
+    })
+  }
+
+  // Sem `numero`, usa a numeração automática. Com um número digitado (ex: número da comanda),
+  // usa ele como está, sem mexer na sequência automática.
+  async function criarPedido(data: { numero?: string | null; clienteNome: string }) {
+    const digitado = (data.numero || '').trim().replace(/^#/, '')
+    if (digitado && abertos.value.some((p) => p.numero.trim() === digitado)) {
+      throw new Error(`Já existe um pedido aberto com o número ${digitado}.`)
+    }
+    const numero = digitado || (await proximoNumero())
     const ref = await addDoc(collection($db as any, 'pedidos'), {
-      numero: data.numero || '',
+      numero,
       clienteNome: data.clienteNome || '',
       status: 'aberto',
       itens: [],
@@ -72,7 +117,7 @@ export function usePedidos() {
       abertoPor: user.value?.email || '',
       fechadoPor: null
     })
-    return ref.id
+    return { id: ref.id, numero }
   }
 
   // Grava os itens do pedido e ajusta o estoque dos produtos na mesma operação.
@@ -102,7 +147,7 @@ export function usePedidos() {
     } else {
       itens.push(item)
     }
-    await salvarItens(pedidoId, itens, consumoDe(item, item.quantidade))
+    await salvarItens(pedidoId, itens, consumoDoItem(item, item.quantidade))
   }
 
   async function definirQuantidade(pedidoId: string, chave: string, quantidade: number) {
@@ -114,20 +159,33 @@ export function usePedidos() {
     const itens = pedido.itens
       .map((i) => (chaveItem(i) === chave ? { ...i, quantidade: nova } : i))
       .filter((i) => i.quantidade > 0)
-    await salvarItens(pedidoId, itens, consumoDe(atual, nova - atual.quantidade))
+    await salvarItens(pedidoId, itens, consumoDoItem(atual, nova - atual.quantidade))
   }
 
   async function removerItem(pedidoId: string, chave: string) {
     await definirQuantidade(pedidoId, chave, 0)
   }
 
-  async function fecharPedido(pedidoId: string, formaPagamento: FormaPagamento) {
+  async function fecharPedido(pedidoId: string, dados: FechamentoPedido) {
     const pedido = abertos.value.find((p) => p.id === pedidoId)
-    // A taxa fica gravada no pedido: mudar a taxa depois não altera vendas já fechadas.
-    const { percentual, valorTaxa } = calcularTaxa(pedido?.total || 0, formaPagamento)
+    const subtotal = calcularTotal(pedido?.itens || [])
+    const valorDesconto = calcularDesconto(subtotal, dados.descontoTipo, dados.descontoInformado)
+    const total = arredondarCentavos(subtotal - valorDesconto)
+    const ehCartao = dados.formaPagamento === 'credito' || dados.formaPagamento === 'debito'
+    const bandeira = ehCartao ? taxas.value.bandeiras.find((b) => b.id === dados.bandeiraId) : null
+    const parcelas = dados.formaPagamento === 'credito' ? dados.parcelas || 1 : null
+    // Taxa e desconto ficam gravados no pedido: mudar a taxa depois não altera vendas já fechadas.
+    const { percentual, valorTaxa } = calcularTaxa(total, { ...dados, parcelas })
     await updateDoc(doc($db as any, 'pedidos', pedidoId), {
       status: 'fechado',
-      formaPagamento,
+      formaPagamento: dados.formaPagamento,
+      bandeira: bandeira?.nome || null,
+      parcelas,
+      subtotal,
+      descontoTipo: valorDesconto ? dados.descontoTipo : null,
+      descontoInformado: valorDesconto ? dados.descontoInformado : 0,
+      valorDesconto,
+      total,
       taxaPercentual: percentual,
       valorTaxa,
       fechadoEm: Date.now(),
@@ -144,10 +202,7 @@ export function usePedidos() {
     batch.delete(doc($db as any, 'pedidos', pedidoId))
     if (pedido) {
       const devolucao = new Map<string, number>()
-      for (const item of pedido.itens) {
-        if (item.controlaEstoque === false) continue
-        devolucao.set(item.produtoId, (devolucao.get(item.produtoId) || 0) + item.quantidade)
-      }
+      for (const item of pedido.itens) consumoDoItem(item, item.quantidade, devolucao)
       for (const [produtoId, qtd] of devolucao) {
         if (!produtoControlaEstoque(produtoId)) continue
         batch.update(doc($db as any, 'produtos', produtoId), {
@@ -169,7 +224,15 @@ export function usePedidos() {
       fechadoEm: null,
       fechadoPor: null,
       taxaPercentual: 0,
-      valorTaxa: 0
+      valorTaxa: 0,
+      bandeira: null,
+      parcelas: null,
+      // Volta ao valor cheio; o desconto é escolhido de novo ao fechar.
+      total: calcularTotal(pedido.itens),
+      subtotal: calcularTotal(pedido.itens),
+      descontoTipo: null,
+      descontoInformado: 0,
+      valorDesconto: 0
     })
   }
 
@@ -191,6 +254,7 @@ export function usePedidos() {
     pedidosAbertos: abertos,
     subscribe,
     criarPedido,
+    sugerirNumero,
     adicionarItem,
     definirQuantidade,
     removerItem,

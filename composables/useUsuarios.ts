@@ -1,10 +1,14 @@
 import { initializeApp, deleteApp } from 'firebase/app'
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
-import { collection, addDoc, onSnapshot, orderBy, query } from 'firebase/firestore'
+import { collection, doc, onSnapshot, orderBy, query, setDoc, updateDoc } from 'firebase/firestore'
+import type { PapelUsuario } from '~/types'
 
 export interface UsuarioRegistrado {
   id: string
+  // Presente quando o documento usa o ID do usuário (só nesses o papel pode ser alterado).
+  uid?: string
   email: string
+  papel?: PapelUsuario
   createdAt: number
   criadoPor: string
 }
@@ -29,7 +33,7 @@ export function useUsuarios() {
     })
   }
 
-  async function criarUsuario(email: string, senha: string) {
+  async function criarUsuario(email: string, senha: string, papel: PapelUsuario) {
     // Cria o usuário numa instância secundária do Firebase, pra não substituir
     // a sessão de quem está logado agora (createUserWithEmailAndPassword loga
     // automaticamente com o usuário recém-criado na instância em que é chamado).
@@ -45,19 +49,27 @@ export function useUsuarios() {
     const appSecundario = initializeApp(firebaseConfig, `secundario-${Date.now()}`)
     const authSecundario = getAuth(appSecundario)
 
+    let uid: string
     try {
-      await createUserWithEmailAndPassword(authSecundario, email, senha)
+      uid = (await createUserWithEmailAndPassword(authSecundario, email, senha)).user.uid
     } finally {
       await signOut(authSecundario).catch(() => {})
       await deleteApp(appSecundario).catch(() => {})
     }
 
-    await addDoc(collection($db as any, 'usuarios'), {
+    // O documento usa o ID do usuário: é por ele que o papel é lido no login e nas regras do Firestore.
+    await setDoc(doc($db as any, 'usuarios', uid), {
+      uid,
       email,
+      papel,
       createdAt: Date.now(),
       criadoPor: user.value?.email || ''
     })
   }
 
-  return { usuarios: lista, subscribe, criarUsuario }
+  async function alterarPapel(uid: string, papel: PapelUsuario) {
+    await updateDoc(doc($db as any, 'usuarios', uid), { papel })
+  }
+
+  return { usuarios: lista, subscribe, criarUsuario, alterarPapel }
 }

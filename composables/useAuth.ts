@@ -4,24 +4,62 @@ import {
   signOut,
   type User
 } from 'firebase/auth'
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore'
+import type { PapelUsuario } from '~/types'
 
 const currentUser = () => useState<User | null>('authUser', () => null)
+const currentPapel = () => useState<PapelUsuario | null>('authPapel', () => null)
 const authReady = () => useState<boolean>('authReady', () => false)
 
 export function useAuth() {
-  const { $auth } = useNuxtApp()
+  const { $auth, $db } = useNuxtApp()
   const user = currentUser()
+  const papel = currentPapel()
   const ready = authReady()
 
+  // O papel fica em usuarios/{uid}. Quem não tem esse documento é admin: é o caso do
+  // primeiro usuário (criado no console do Firebase) e de quem foi criado antes dos papéis.
+  async function carregarPapel(u: User): Promise<PapelUsuario> {
+    try {
+      const snap = await getDoc(doc($db as any, 'usuarios', u.uid))
+      if (snap.exists()) return snap.data().papel === 'vendedor' ? 'vendedor' : 'admin'
+
+      // Cadastros antigos tinham ID aleatório: passa para o ID do usuário, para o papel poder ser alterado.
+      const antigos = await getDocs(query(collection($db as any, 'usuarios'), where('email', '==', u.email)))
+      if (!antigos.empty) {
+        const dados = antigos.docs[0].data()
+        await setDoc(doc($db as any, 'usuarios', u.uid), { ...dados, uid: u.uid, papel: 'admin' })
+        await Promise.all(antigos.docs.map((d) => deleteDoc(d.ref)))
+      }
+      return 'admin'
+    } catch {
+      // Sem conseguir confirmar o papel, mostra só o que um vendedor vê.
+      return 'vendedor'
+    }
+  }
+
   if (import.meta.client && !ready.value) {
-    onAuthStateChanged($auth as any, (u) => {
+    onAuthStateChanged($auth as any, async (u) => {
+      // Usuário e papel são publicados juntos, para nenhuma tela aparecer antes de saber o papel.
+      papel.value = u ? await carregarPapel(u) : null
       user.value = u
       ready.value = true
     })
   }
 
+  const ehAdmin = computed(() => papel.value === 'admin')
+
   async function login(email: string, password: string) {
-    await signInWithEmailAndPassword($auth as any, email, password)
+    const cred = await signInWithEmailAndPassword($auth as any, email, password)
+    // Espera o papel ser carregado antes de seguir para o painel.
+    await new Promise<void>((resolve) => {
+      const stop = watch(user, (u) => {
+        if (u?.uid === cred.user.uid) {
+          stop()
+          resolve()
+        }
+      }, { immediate: true })
+    })
   }
 
   async function logout() {
@@ -29,5 +67,5 @@ export function useAuth() {
     await navigateTo('/login')
   }
 
-  return { user, ready, login, logout }
+  return { user, papel, ehAdmin, ready, login, logout }
 }

@@ -1,4 +1,4 @@
-import type { CategoriaVendida, Pedido, ProdutoVendido } from '~/types'
+import type { CategoriaVendida, Pedido, ProdutoVendido, TipoDesconto } from '~/types'
 
 // Soma os itens de todos os pedidos, agrupando por categoria e depois por produto.
 // Por padrão, vendas com valor normal e valor de evento do mesmo produto ficam em linhas
@@ -41,4 +41,19 @@ export function agruparPorCategoria(
     return { categoria, produtos: lista, total: lista.reduce((s, p) => s + p.total, 0) }
   })
   return resultado.sort((a, b) => a.categoria.localeCompare(b.categoria))
+}
+
+// Valor em R$ do desconto, limitado ao subtotal. `valor` é % ou R$, conforme o tipo.
+export function calcularDesconto(subtotal: number, tipo: TipoDesconto | null, valor: number | null) {
+  if (!tipo || !valor || valor <= 0) return 0
+  const desconto = tipo === 'percentual' ? (subtotal * Math.min(valor, 100)) / 100 : valor
+  return arredondarCentavos(Math.min(desconto, subtotal))
+}
+
+// Ex: "Cartão crédito · Visa · 3x"
+export function descricaoPagamento(p: Pick<Pedido, 'formaPagamento' | 'bandeira' | 'parcelas'>) {
+  const partes = [rotuloFormaPagamento(p.formaPagamento)]
+  if (p.bandeira) partes.push(p.bandeira)
+  if (p.formaPagamento === 'credito' && p.parcelas) partes.push(`${p.parcelas}x`)
+  return partes.join(' · ')
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const { user, logout } = useAuth()
+const { user, ehAdmin, logout } = useAuth()
 const menuAberto = ref(false)
 
 const itensMenu = [
@@ -40,8 +40,9 @@ const itensMenu = [
         @click="menuAberto = false"
       >
         <p class="truncate px-2 py-1 text-xs text-roxo-400">{{ user?.email }}</p>
+        <p v-if="!ehAdmin" class="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-roxo-300">Vendedor</p>
         <NuxtLink
-          v-for="item in itensMenu"
+          v-for="item in ehAdmin ? itensMenu : []"
           :key="item.to"
           :to="item.to"
           class="mt-1 block w-full rounded-lg px-2 py-2 text-left text-sm font-medium text-roxo-700 hover:bg-roxo-50"

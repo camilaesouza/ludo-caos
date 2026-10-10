@@ -113,7 +113,7 @@ async function confirmarExclusao() {
                 <span v-if="p.clienteNome" class="font-normal text-roxo-500">· {{ p.clienteNome }}</span>
               </p>
               <p class="text-[11px] text-roxo-300">
-                {{ quando(p.fechadoEm) }} · {{ rotuloFormaPagamento(p.formaPagamento) }}
+                {{ quando(p.fechadoEm) }} · {{ descricaoPagamento(p) }}
                 <span v-if="p.fechadoPor"> · por {{ nomeCurto(p.fechadoPor) }}</span>
               </p>
             </div>
@@ -130,7 +130,7 @@ async function confirmarExclusao() {
     >
       <p class="text-sm text-roxo-500">{{ selecionado.clienteNome || 'Sem nome' }}</p>
       <p class="mb-3 text-xs text-roxo-300">
-        Encerrado em {{ new Date(selecionado.fechadoEm || 0).toLocaleDateString('pt-BR') }} às {{ hora(selecionado.fechadoEm) }} · {{ rotuloFormaPagamento(selecionado.formaPagamento) }}
+        Encerrado em {{ new Date(selecionado.fechadoEm || 0).toLocaleDateString('pt-BR') }} às {{ hora(selecionado.fechadoEm) }} · {{ descricaoPagamento(selecionado) }}
       </p>
 
       <ul class="mb-3 divide-y divide-roxo-50">
@@ -148,6 +148,19 @@ async function confirmarExclusao() {
       </ul>
 
       <div class="mb-4 space-y-1 border-t border-roxo-100 pt-3">
+        <template v-if="selecionado.valorDesconto">
+          <div class="flex items-center justify-between text-xs text-roxo-400">
+            <span>Subtotal</span>
+            <span>{{ formatarMoeda(selecionado.subtotal || 0) }}</span>
+          </div>
+          <div class="flex items-center justify-between text-xs text-roxo-400">
+            <span>
+              Desconto
+              <template v-if="selecionado.descontoTipo === 'percentual'">({{ formatarPercentual(selecionado.descontoInformado || 0) }})</template>
+            </span>
+            <span class="text-red-500">-{{ formatarMoeda(selecionado.valorDesconto) }}</span>
+          </div>
+        </template>
         <div class="flex items-center justify-between">
           <span class="text-sm font-bold text-roxo-700">Total</span>
           <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(selecionado.total) }}</span>

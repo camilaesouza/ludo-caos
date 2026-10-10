@@ -27,9 +27,11 @@ export function useCaixa() {
 
     let totalVendas = 0
     let totalTaxas = 0
+    let totalDescontos = 0
     for (const p of pedidos) {
       totalVendas += p.total
       totalTaxas += p.valorTaxa || 0
+      totalDescontos += p.valorDesconto || 0
       if (p.formaPagamento && p.valorTaxa) {
         taxasPorForma[p.formaPagamento] = (taxasPorForma[p.formaPagamento] || 0) + p.valorTaxa
       }
@@ -53,6 +55,7 @@ export function useCaixa() {
       totalPedidos: pedidos.length,
       totalGastos,
       totalTaxas: arredondarCentavos(totalTaxas),
+      totalDescontos: arredondarCentavos(totalDescontos),
       totalLiquido: arredondarCentavos(totalVendas - totalTaxas - totalGastos),
       formasPagamento,
       taxasPorForma
@@ -68,6 +71,7 @@ export function useCaixa() {
       totalPedidos: resumo.totalPedidos,
       totalGastos: resumo.totalGastos,
       totalTaxas: resumo.totalTaxas,
+      totalDescontos: resumo.totalDescontos,
       totalLiquido: resumo.totalLiquido,
       formasPagamento: resumo.formasPagamento,
       vendasPorCategoria: resumo.vendasPorCategoria,

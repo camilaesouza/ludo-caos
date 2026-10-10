@@ -1,5 +1,24 @@
 <script setup lang="ts">
-import type { MedidaPorcao, Produto } from '~/types'
+import type { MedidaPorcao, Produto, UnidadeMedida } from '~/types'
+
+type TipoCadastro = 'produto' | 'receita' | 'insumo'
+
+const TIPOS: { valor: TipoCadastro; rotulo: string; dica: string }[] = [
+  { valor: 'produto', rotulo: 'Produto', dica: 'Item vendido direto, com estoque próprio. Ex: refrigerante.' },
+  { valor: 'receita', rotulo: 'Receita', dica: 'Feito com outros produtos. Ao vender, desconta dos ingredientes. Ex: batata frita.' },
+  { valor: 'insumo', rotulo: 'Insumo', dica: 'Só estoque, usado nas receitas e não aparece para venda. Ex: óleo.' }
+]
+
+const MEDIDAS_INSUMO: { valor: UnidadeMedida; rotulo: string }[] = [
+  ...MEDIDAS,
+  { valor: 'un', rotulo: 'Unidade (un)' }
+]
+
+interface IngredienteForm {
+  produtoId: string
+  quantidade: number | string | null
+  unidade: UnidadeMedida
+}
 
 type FormaVenda = 'unidade' | 'porcao' | 'fracionado'
 
@@ -14,6 +33,9 @@ subscribe()
 
 const modalAberto = ref(false)
 const editando = ref<Produto | null>(null)
+const tipo = ref<TipoCadastro>('produto')
+const ingredientes = ref<IngredienteForm[]>([])
+const medidaInsumo = ref<UnidadeMedida>('ml')
 const nome = ref('')
 const preco = ref<number | null>(null)
 const precoEvento = ref<number | null>(null)
@@ -27,6 +49,9 @@ const salvando = ref(false)
 
 function abrirNovo() {
   editando.value = null
+  tipo.value = 'produto'
+  ingredientes.value = []
+  medidaInsumo.value = 'ml'
   nome.value = ''
   preco.value = null
   precoEvento.value = null
@@ -44,6 +69,9 @@ function abrirEdicao(p: Produto) {
   preco.value = p.preco
   precoEvento.value = p.precoEvento ?? null
   categoria.value = p.categoria
+  tipo.value = ehReceita(p) ? 'receita' : p.insumo ? 'insumo' : 'produto'
+  ingredientes.value = (p.ingredientes || []).map((i) => ({ ...i }))
+  medidaInsumo.value = p.unidade || 'un'
   if (ehPorcao(p)) {
     formaVenda.value = 'porcao'
     medida.value = p.unidadeConteudo!
@@ -61,8 +89,40 @@ function abrirEdicao(p: Produto) {
   modalAberto.value = true
 }
 
-// Unidade em que estoque e preço são contados: porções e unidades contam 'un'.
-const unidadeContagem = computed(() => (formaVenda.value === 'fracionado' ? medida.value : 'un'))
+// Unidade em que estoque e preço são contados: porções, unidades e receitas contam 'un'.
+const unidadeContagem = computed<UnidadeMedida>(() => {
+  if (tipo.value === 'insumo') return medidaInsumo.value
+  if (tipo.value === 'produto' && formaVenda.value === 'fracionado') return medida.value
+  return 'un'
+})
+
+// Qualquer produto ou insumo pode ser ingrediente; receitas não (sem receita dentro de receita).
+const opcoesIngrediente = computed(() =>
+  produtos.value
+    .filter((p) => !ehReceita(p) && p.id !== editando.value?.id)
+    .map((p) => ({ valor: p.id, rotulo: nomeProduto(p) }))
+)
+
+function produtoDe(id: string) {
+  return produtos.value.find((p) => p.id === id)
+}
+
+function adicionarIngrediente() {
+  ingredientes.value.push({ produtoId: '', quantidade: null, unidade: 'un' })
+}
+
+// Ao escolher o ingrediente, a medida começa pela menor da família (óleo em l → ml).
+function aoEscolherIngrediente(ing: IngredienteForm, produtoId: string) {
+  ing.produtoId = produtoId
+  const unidade = produtoDe(ing.produtoId)?.unidade || 'un'
+  ing.unidade = medidasCompativeis(unidade).find((u) => u === 'g' || u === 'ml') || unidade
+}
+
+function opcoesMedidaIngrediente(ing: IngredienteForm) {
+  const produto = produtoDe(ing.produtoId)
+  if (produto && ehPorcao(produto)) return [{ valor: 'un' as UnidadeMedida, rotulo: 'porção' }]
+  return medidasCompativeis(produto?.unidade || 'un').map((u) => ({ valor: u, rotulo: u }))
+}
 
 const conteudoNum = computed(() => {
   const n = Number(conteudo.value)
@@ -70,6 +130,7 @@ const conteudoNum = computed(() => {
 })
 
 const rotuloEstoque = computed(() => {
+  if (tipo.value === 'insumo') return `Quantidade em estoque (${medidaInsumo.value})`
   if (formaVenda.value === 'porcao') return 'Estoque (porções)'
   return `Estoque (${unidadeContagem.value})`
 })
@@ -82,7 +143,7 @@ const rotuloPreco = computed(() => {
 // Ex: "5 porções de 200 g = 1 kg"
 const resumoPorcao = computed(() => {
   const qtd = Number(estoque.value)
-  if (formaVenda.value !== 'porcao' || !conteudoNum.value || !qtd || qtd <= 0) return ''
+  if (tipo.value !== 'produto' || formaVenda.value !== 'porcao' || !conteudoNum.value || !qtd || qtd <= 0) return ''
   const porcao = formatarMedida(conteudoNum.value, medida.value)
   const total = formatarMedida(qtd * conteudoNum.value, medida.value)
   return `${qtd} ${qtd === 1 ? 'porção' : 'porções'} de ${porcao} = ${total}`
@@ -92,24 +153,41 @@ const erro = ref('')
 
 async function salvar() {
   erro.value = ''
-  if (!nome.value || preco.value === null) return
-  if (formaVenda.value === 'porcao' && !conteudoNum.value) {
+  if (!nome.value || (tipo.value !== 'insumo' && preco.value === null)) return
+  const ehProduto = tipo.value === 'produto'
+  const porcao = ehProduto && formaVenda.value === 'porcao'
+  if (porcao && !conteudoNum.value) {
     erro.value = 'Informe o tamanho da porção.'
+    return
+  }
+  // Campo de estoque vazio = produto sem controle de estoque.
+  const estoqueNum = estoque.value === null || estoque.value === '' ? null : Number(estoque.value)
+  const estoqueValido = estoqueNum === null || Number.isNaN(estoqueNum) ? null : arredondarQuantidade(estoqueNum)
+  if (tipo.value === 'insumo' && estoqueValido === null) {
+    erro.value = 'Informe a quantidade em estoque do insumo.'
+    return
+  }
+  const listaIngredientes = ingredientes.value
+    .filter((i) => i.produtoId && Number(i.quantidade) > 0)
+    .map((i) => ({ produtoId: i.produtoId, quantidade: arredondarQuantidade(Number(i.quantidade)), unidade: i.unidade }))
+  if (tipo.value === 'receita' && !listaIngredientes.length) {
+    erro.value = 'Adicione ao menos um ingrediente com quantidade.'
     return
   }
   salvando.value = true
   try {
-    // Campo de estoque vazio = produto sem controle de estoque.
-    const estoqueNum = estoque.value === null || estoque.value === '' ? null : Number(estoque.value)
     const dados = {
       nome: nome.value,
-      preco: preco.value,
-      precoEvento: precoEvento.value || null,
+      preco: tipo.value === 'insumo' ? 0 : preco.value!,
+      precoEvento: tipo.value === 'insumo' ? null : precoEvento.value || null,
       categoria: categoria.value,
       unidade: unidadeContagem.value,
-      conteudo: formaVenda.value === 'porcao' ? conteudoNum.value : null,
-      unidadeConteudo: formaVenda.value === 'porcao' ? medida.value : null,
-      estoque: estoqueNum === null || Number.isNaN(estoqueNum) ? null : arredondarQuantidade(estoqueNum)
+      conteudo: porcao ? conteudoNum.value : null,
+      unidadeConteudo: porcao ? medida.value : null,
+      // Receita não tem estoque próprio: o estoque é o dos ingredientes.
+      estoque: tipo.value === 'receita' ? null : estoqueValido,
+      ingredientes: tipo.value === 'receita' ? listaIngredientes : null,
+      insumo: tipo.value === 'insumo'
     }
     if (editando.value) {
       await atualizarProduto(editando.value.id, dados)
@@ -215,9 +293,19 @@ const produtosPorCategoria = computed(() => {
               />
               {{ nomeProduto(p) }}
             </p>
-            <p class="text-xs text-roxo-400">
+            <p v-if="p.insumo" class="text-xs text-roxo-400">Insumo</p>
+            <p v-else class="text-xs text-roxo-400">
               {{ formatarMoeda(p.preco) }}/{{ ehPorcao(p) ? 'porção' : p.unidade || 'un' }}
               <span v-if="p.precoEvento"> · evento {{ formatarMoeda(p.precoEvento) }}</span>
+            </p>
+            <p v-if="ehReceita(p)" class="text-[11px] font-medium text-roxo-300">
+              Receita · {{ p.ingredientes!.length }} {{ p.ingredientes!.length === 1 ? 'ingrediente' : 'ingredientes' }}
+              <span
+                v-if="receitasDisponiveis(p, produtos) !== null"
+                :class="{ 'text-red-500': receitasDisponiveis(p, produtos)! <= 0 }"
+              >
+                · dá para {{ receitasDisponiveis(p, produtos) }}
+              </span>
             </p>
             <p
               v-if="typeof p.estoque === 'number'"
@@ -243,6 +331,22 @@ const produtosPorCategoria = computed(() => {
     <UiModal v-if="modalAberto" :titulo="editando ? 'Editar produto' : 'Novo produto'" @fechar="modalAberto = false">
       <form class="space-y-3" @submit.prevent="salvar">
         <div>
+          <label class="mb-1 block text-xs font-semibold text-roxo-500">Tipo</label>
+          <div class="flex rounded-xl bg-roxo-50 p-1">
+            <button
+              v-for="t in TIPOS"
+              :key="t.valor"
+              type="button"
+              class="flex-1 rounded-lg py-2 text-xs font-bold"
+              :class="tipo === t.valor ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+              @click="tipo = t.valor"
+            >
+              {{ t.rotulo }}
+            </button>
+          </div>
+          <p class="mt-1 text-[11px] text-roxo-300">{{ TIPOS.find((t) => t.valor === tipo)!.dica }}</p>
+        </div>
+        <div>
           <label class="mb-1 block text-xs font-semibold text-roxo-500">Nome</label>
           <input
             v-model="nome"
@@ -260,7 +364,7 @@ const produtosPorCategoria = computed(() => {
             placeholder="Escolha ou digite uma nova"
           />
         </div>
-        <div>
+        <div v-if="tipo === 'produto'">
           <label class="mb-1 block text-xs font-semibold text-roxo-500">Como é vendido</label>
           <div class="flex rounded-xl bg-roxo-50 p-1">
             <button
@@ -277,7 +381,7 @@ const produtosPorCategoria = computed(() => {
           <p class="mt-1 text-[11px] text-roxo-300">{{ FORMAS_VENDA.find((f) => f.valor === formaVenda)!.dica }}</p>
         </div>
 
-        <div v-if="formaVenda === 'porcao'" class="grid grid-cols-2 gap-3">
+        <div v-if="tipo === 'produto' && formaVenda === 'porcao'" class="grid grid-cols-2 gap-3">
           <div>
             <label class="mb-1 block text-xs font-semibold text-roxo-500">Tamanho da porção</label>
             <input
@@ -297,26 +401,76 @@ const produtosPorCategoria = computed(() => {
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div v-if="formaVenda === 'fracionado'">
+        <div v-if="tipo !== 'receita'" class="grid grid-cols-2 gap-3">
+          <div v-if="tipo === 'insumo'">
+            <label class="mb-1 block text-xs font-semibold text-roxo-500">Medida</label>
+            <UiSelect v-model="medidaInsumo" :opcoes="MEDIDAS_INSUMO" />
+          </div>
+          <div v-else-if="formaVenda === 'fracionado'">
             <label class="mb-1 block text-xs font-semibold text-roxo-500">Medida</label>
             <UiSelect v-model="medida" :opcoes="MEDIDAS" />
           </div>
-          <div :class="{ 'col-span-2': formaVenda !== 'fracionado' }">
+          <div :class="{ 'col-span-2': tipo === 'produto' && formaVenda !== 'fracionado' }">
             <label class="mb-1 block text-xs font-semibold text-roxo-500">{{ rotuloEstoque }}</label>
             <input
               v-model="estoque"
               type="number"
               min="0"
-              :step="formaVenda === 'fracionado' ? 'any' : '1'"
+              :step="unidadeContagem === 'un' ? '1' : 'any'"
+              :required="tipo === 'insumo'"
               class="w-full rounded-xl border border-roxo-100 px-3 py-2.5 text-sm focus:border-roxo-400 focus:outline-none"
-              placeholder="Sem controle"
+              :placeholder="tipo === 'insumo' ? 'Ex: 5000' : 'Sem controle'"
             />
           </div>
         </div>
         <p v-if="resumoPorcao" class="-mt-1 text-[11px] font-medium text-roxo-500">{{ resumoPorcao }}</p>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div v-if="tipo === 'receita'" class="space-y-2">
+          <label class="block text-xs font-semibold text-roxo-500">Ingredientes (por unidade vendida)</label>
+          <p v-if="!opcoesIngrediente.length" class="text-[11px] text-roxo-300">
+            Cadastre primeiro os produtos ou insumos usados na receita.
+          </p>
+          <div
+            v-for="(ing, i) in ingredientes"
+            :key="i"
+            class="space-y-2 rounded-xl bg-roxo-50 p-2"
+          >
+            <div class="flex items-center gap-2">
+              <UiSelect
+                :model-value="ing.produtoId"
+                class="min-w-0 flex-1"
+                :opcoes="opcoesIngrediente"
+                placeholder="Escolha o ingrediente"
+                @update:model-value="aoEscolherIngrediente(ing, $event)"
+              />
+              <button type="button" class="px-1 text-red-400" @click="ingredientes.splice(i, 1)">✕</button>
+            </div>
+            <div v-if="ing.produtoId" class="flex items-center gap-2">
+              <input
+                v-model="ing.quantidade"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                step="any"
+                class="min-w-0 flex-1 rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm focus:border-roxo-400 focus:outline-none"
+                placeholder="Quantidade"
+              />
+              <UiSelect v-model="ing.unidade" class="w-24" :opcoes="opcoesMedidaIngrediente(ing)" />
+            </div>
+            <p v-if="ing.produtoId && typeof produtoDe(ing.produtoId)?.estoque !== 'number'" class="text-[11px] text-roxo-300">
+              Esse produto não tem estoque controlado: nada será descontado dele.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="w-full rounded-xl border-2 border-dashed border-roxo-200 py-2 text-xs font-bold text-roxo-500"
+            @click="adicionarIngrediente"
+          >
+            + Ingrediente
+          </button>
+        </div>
+
+        <div v-if="tipo !== 'insumo'" class="grid grid-cols-2 gap-3">
           <div>
             <label class="mb-1 block text-xs font-semibold text-roxo-500">{{ rotuloPreco }}</label>
             <UiInputMoeda v-model="preco" required />
@@ -328,7 +482,9 @@ const produtosPorCategoria = computed(() => {
         </div>
         <p v-if="erro" class="text-sm font-medium text-red-600">{{ erro }}</p>
         <p class="text-[11px] text-roxo-300">
-          Deixe o estoque vazio para não controlar. O valor de evento pode ser escolhido na hora de lançar no pedido.
+          <template v-if="tipo === 'receita'">A cada venda, a quantidade de cada ingrediente sai do estoque dele.</template>
+          <template v-else-if="tipo === 'insumo'">O estoque do insumo diminui quando receitas que usam ele são vendidas.</template>
+          <template v-else>Deixe o estoque vazio para não controlar. O valor de evento pode ser escolhido na hora de lançar no pedido.</template>
         </p>
         <button
           type="submit"

@@ -32,10 +32,11 @@ export function nomeProduto(p: Pick<Produto, 'nome' | 'conteudo' | 'unidadeConte
   return ehPorcao(p) ? `${p.nome} (${formatarMedida(p.conteudo!, p.unidadeConteudo!)})` : p.nome
 }
 
-// Estoque por extenso: "5 un · 1 kg" para porções, "2,5 kg" para fracionados.
+// Estoque por extenso: "5 un · 1 kg" para porções, "2,5 kg" para fracionados, "4,99 l" para 4990 ml.
 export function formatarEstoque(p: Pick<Produto, 'estoque' | 'unidade' | 'conteudo' | 'unidadeConteudo'>) {
   if (typeof p.estoque !== 'number') return ''
-  const base = formatarQuantidade(p.estoque, p.unidade || 'un')
+  const unidade = p.unidade || 'un'
+  const base = unidade === 'un' ? formatarQuantidade(p.estoque, 'un') : formatarMedida(p.estoque, unidade)
   if (!ehPorcao(p) || p.estoque <= 0) return base
   return `${base} · ${formatarMedida(p.estoque * p.conteudo!, p.unidadeConteudo!)}`
 }

@@ -1,6 +1,15 @@
 export type UnidadeMedida = 'un' | 'kg' | 'g' | 'l' | 'ml'
 export type MedidaPorcao = Exclude<UnidadeMedida, 'un'>
 export type TipoPreco = 'normal' | 'evento'
+export type PapelUsuario = 'admin' | 'vendedor'
+
+// Ingrediente de uma receita: quanto do produto `produtoId` vai em 1 unidade da receita.
+// A medida pode ser diferente da do estoque do ingrediente, desde que compatível (ml ↔ l, g ↔ kg).
+export interface IngredienteReceita {
+  produtoId: string
+  quantidade: number
+  unidade: UnidadeMedida
+}
 
 export interface Produto {
   id: string
@@ -15,6 +24,10 @@ export interface Produto {
   unidadeConteudo?: MedidaPorcao | null
   // null/ausente = produto sem controle de estoque
   estoque?: number | null
+  // Receita (ex: batata frita): não tem estoque próprio; ao vender, desconta dos ingredientes.
+  ingredientes?: IngredienteReceita[] | null
+  // Insumo (ex: óleo): só tem estoque, é usado em receitas e não aparece para venda.
+  insumo?: boolean
   ativo: boolean
   createdAt: number
 }
@@ -29,6 +42,9 @@ export interface ItemPedido {
   tipoPreco?: TipoPreco
   // false para itens avulsos, que não mexem em estoque
   controlaEstoque?: boolean
+  // Receitas: quanto sai de cada ingrediente por unidade vendida, já na medida do estoque dele.
+  // Fica gravado no item para devolver ao estoque o mesmo que saiu, mesmo se a receita mudar depois.
+  ingredientes?: { produtoId: string; quantidade: number }[]
 }
 
 export interface ProdutoVendido {
@@ -65,7 +81,17 @@ export interface Pedido {
   // Taxa da maquininha aplicada no fechamento (em %, ex: 3 = 3%) e o valor descontado.
   taxaPercentual?: number
   valorTaxa?: number
+  // Cartão: nome da bandeira e, no crédito, em quantas vezes foi parcelado.
+  bandeira?: string | null
+  parcelas?: number | null
+  // Desconto dado no fechamento. `total` já vem com o desconto aplicado; `subtotal` é a soma dos itens.
+  subtotal?: number
+  descontoTipo?: TipoDesconto | null
+  descontoInformado?: number
+  valorDesconto?: number
 }
+
+export type TipoDesconto = 'percentual' | 'valor'
 
 export type TipoCompra = 'avista' | 'parcelado'
 
@@ -89,9 +115,18 @@ export interface Gasto {
   criadoPor: string
 }
 
-export interface ConfiguracaoTaxas {
-  credito: number // %
+export interface BandeiraCartao {
+  id: string
+  nome: string
   debito: number // %
+  credito: number // %
+}
+
+export interface ConfiguracaoTaxas {
+  bandeiras: BandeiraCartao[]
+  pix: number // %
+  // Acréscimo (%) somado à taxa de crédito da bandeira, por número de parcelas: [1x, 2x, 3x].
+  parcelamento: number[]
 }
 
 export interface FechamentoCaixa {
@@ -101,6 +136,7 @@ export interface FechamentoCaixa {
   totalPedidos: number
   totalGastos: number
   totalTaxas?: number
+  totalDescontos?: number
   totalLiquido: number
   formasPagamento: Record<FormaPagamento, number>
   vendasPorCategoria?: CategoriaVendida[]

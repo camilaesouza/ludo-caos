@@ -31,7 +31,16 @@ export function useProdutos() {
   async function criarProduto(
     data: Pick<
       Produto,
-      'nome' | 'preco' | 'precoEvento' | 'categoria' | 'unidade' | 'conteudo' | 'unidadeConteudo' | 'estoque'
+      | 'nome'
+      | 'preco'
+      | 'precoEvento'
+      | 'categoria'
+      | 'unidade'
+      | 'conteudo'
+      | 'unidadeConteudo'
+      | 'estoque'
+      | 'ingredientes'
+      | 'insumo'
     >
   ) {
     await addDoc(collection($db as any, 'produtos'), {
@@ -49,7 +58,8 @@ export function useProdutos() {
     await deleteDoc(doc($db as any, 'produtos', id))
   }
 
-  const ativos = computed(() => list.value.filter((p) => p.ativo))
+  // Produtos à venda: insumos só entram em receitas.
+  const ativos = computed(() => list.value.filter((p) => p.ativo && !p.insumo))
   const categorias = computed(() => {
     const set = new Set(list.value.map((p) => p.categoria).filter(Boolean))
     return Array.from(set).sort()

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-const { pedidosAbertos, subscribe, criarPedido } = usePedidos()
+const { pedidosAbertos, subscribe, criarPedido, sugerirNumero } = usePedidos()
 subscribe()
 
 const modalAberto = ref(false)
 const numero = ref('')
+// Número sugerido pela sequência; se o campo continuar com ele, o número é reservado ao abrir.
+const numeroSugerido = ref('')
 const clienteNome = ref('')
 const salvando = ref(false)
 const erro = ref('')
@@ -13,19 +15,32 @@ const pedidosFiltrados = computed(() =>
   pedidosAbertos.value.filter((p) => pedidoCombinaBusca(p, busca.value))
 )
 
-function abrirNovo() {
+async function abrirNovo() {
   numero.value = ''
+  numeroSugerido.value = ''
   clienteNome.value = ''
   erro.value = ''
   modalAberto.value = true
+  try {
+    const sugestao = await sugerirNumero()
+    // Não sobrescreve se a pessoa já começou a digitar.
+    if (!numero.value) numero.value = sugestao
+    numeroSugerido.value = sugestao
+  } catch {
+    // Sem sugestão, o campo vazio também usa a numeração automática.
+  }
 }
 
 async function salvar() {
-  if (!numero.value && !clienteNome.value) return
   erro.value = ''
   salvando.value = true
   try {
-    const id = await criarPedido({ numero: numero.value, clienteNome: clienteNome.value })
+    const digitado = numero.value.trim()
+    const automatico = !digitado || digitado === numeroSugerido.value
+    const { id } = await criarPedido({
+      numero: automatico ? null : digitado,
+      clienteNome: clienteNome.value.trim()
+    })
     modalAberto.value = false
     await navigateTo(`/pedidos/${id}`)
   } catch (e: any) {
@@ -97,8 +112,9 @@ function tempoAberto(createdAt: number) {
           <label class="mb-1 block text-xs font-semibold text-roxo-500">Número do pedido</label>
           <input
             v-model="numero"
+            inputmode="numeric"
             class="w-full rounded-xl border border-roxo-100 px-3 py-2.5 text-sm focus:border-roxo-400 focus:outline-none"
-            placeholder="Ex: 12"
+            :placeholder="numeroSugerido ? `Automático (${numeroSugerido})` : 'Automático'"
           />
         </div>
         <div>
@@ -109,7 +125,9 @@ function tempoAberto(createdAt: number) {
             placeholder="Ex: Maria"
           />
         </div>
-        <p class="text-xs text-roxo-300">Preencha ao menos o número ou o nome do cliente.</p>
+        <p class="text-xs text-roxo-300">
+          O número vem preenchido com o próximo da sequência. Se usar comanda, troque pelo número dela.
+        </p>
         <p v-if="erro" class="text-sm font-medium text-red-600">{{ erro }}</p>
         <button
           type="submit"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormaPagamento, Produto, TipoPreco } from '~/types'
+import type { FormaPagamento, Produto, TipoDesconto, TipoPreco } from '~/types'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -7,7 +7,7 @@ const id = route.params.id as string
 const { subscribe, pedidoPorId, adicionarItem, definirQuantidade, removerItem, fecharPedido, removerPedido } = usePedidos()
 const { produtos, ativos, subscribe: subscribeProdutos } = useProdutos()
 const { user } = useAuth()
-const { subscribe: subscribeTaxas, calcularTaxa } = useTaxas()
+const { taxas, subscribe: subscribeTaxas, calcularTaxa } = useTaxas()
 subscribe()
 subscribeProdutos()
 subscribeTaxas()
@@ -18,7 +18,53 @@ const modalProdutosAberto = ref(false)
 const modalFecharAberto = ref(false)
 const modalExcluirAberto = ref(false)
 const formaPagamento = ref<FormaPagamento>('dinheiro')
-const resumoTaxa = computed(() => calcularTaxa(pedido.value?.total || 0, formaPagamento.value))
+const bandeiraId = ref<string | null>(null)
+const parcelas = ref(1)
+const descontoTipo = ref<TipoDesconto>('percentual')
+const descontoInformado = ref<number | null>(null)
+const dividirConta = ref(false)
+const pessoas = ref<number | null>(2)
+const erroFechar = ref('')
+
+const ehCartao = computed(() => formaPagamento.value === 'credito' || formaPagamento.value === 'debito')
+const valorDesconto = computed(() =>
+  calcularDesconto(pedido.value?.total || 0, descontoTipo.value, descontoInformado.value)
+)
+const totalComDesconto = computed(() => arredondarCentavos((pedido.value?.total || 0) - valorDesconto.value))
+const resumoTaxa = computed(() =>
+  calcularTaxa(totalComDesconto.value, {
+    formaPagamento: formaPagamento.value,
+    bandeiraId: bandeiraId.value,
+    parcelas: parcelas.value
+  })
+)
+
+// Divide em centavos inteiros; quando não fecha exato, a diferença fica com a última pessoa.
+const divisao = computed(() => {
+  const n = Math.floor(Number(pessoas.value) || 0)
+  if (n < 2) return null
+  const centavos = Math.round(totalComDesconto.value * 100)
+  const porPessoa = Math.floor(centavos / n) / 100
+  const ultima = arredondarCentavos(totalComDesconto.value - porPessoa * (n - 1))
+  return { n, porPessoa, ultima }
+})
+
+function abrirFechar() {
+  formaPagamento.value = 'dinheiro'
+  bandeiraId.value = null
+  parcelas.value = 1
+  descontoTipo.value = 'percentual'
+  descontoInformado.value = null
+  dividirConta.value = false
+  pessoas.value = 2
+  erroFechar.value = ''
+  modalFecharAberto.value = true
+}
+
+function trocarTipoDesconto(tipo: TipoDesconto) {
+  descontoTipo.value = tipo
+  descontoInformado.value = null
+}
 const fechando = ref(false)
 const excluindo = ref(false)
 const busca = ref('')
@@ -54,6 +100,7 @@ function tipoEfetivo(produto: Produto): TipoPreco {
 
 async function lancar(produto: Produto, quantidade: number) {
   const tipo = tipoEfetivo(produto)
+  const receita = ehReceita(produto)
   await adicionarItem(id, {
     produtoId: produto.id,
     // Porções entram com o tamanho no nome, ex: "Batata congelada (200 g)".
@@ -63,7 +110,9 @@ async function lancar(produto: Produto, quantidade: number) {
     unidade: produto.unidade || 'un',
     categoria: produto.categoria || '',
     tipoPreco: tipo,
-    controlaEstoque: typeof produto.estoque === 'number'
+    controlaEstoque: receita || typeof produto.estoque === 'number',
+    // Receita: grava quanto sai de cada ingrediente, para descontar e devolver o mesmo.
+    ...(receita ? { ingredientes: consumoPorUnidade(produto, produtos.value) } : {})
   })
 }
 
@@ -94,7 +143,9 @@ async function aoEditarQuantidade(chave: string, e: Event) {
   await definirQuantidade(id, chave, valor)
 }
 
+// Para receitas, quantas dá para fazer com o estoque dos ingredientes.
 function estoqueDe(produto: Produto) {
+  if (ehReceita(produto)) return receitasDisponiveis(produto, produtos.value)
   return typeof produto.estoque === 'number' ? produto.estoque : null
 }
 
@@ -120,9 +171,24 @@ async function adicionarValorAvulso() {
 }
 
 async function confirmarFechamento() {
+  erroFechar.value = ''
+  if (ehCartao.value && taxas.value.bandeiras.length && !bandeiraId.value) {
+    erroFechar.value = 'Escolha a bandeira do cartão.'
+    return
+  }
   fechando.value = true
   try {
-    await fecharPedido(id, formaPagamento.value)
+    await fecharPedido(id, {
+      formaPagamento: formaPagamento.value,
+      bandeiraId: ehCartao.value ? bandeiraId.value : null,
+      parcelas: formaPagamento.value === 'credito' ? parcelas.value : null,
+      descontoTipo: valorDesconto.value ? descontoTipo.value : null,
+      descontoInformado: valorDesconto.value
+        ? descontoTipo.value === 'percentual'
+          ? Math.min(descontoInformado.value!, 100)
+          : descontoInformado.value
+        : null
+    })
     modalFecharAberto.value = false
     await navigateTo('/pedidos')
   } finally {
@@ -228,7 +294,7 @@ async function confirmarExclusao() {
         <button
           class="rounded-xl bg-amarelo-400 px-5 py-3 text-sm font-bold text-roxo-800 shadow-sm disabled:opacity-50"
           :disabled="!pedido.itens.length"
-          @click="modalFecharAberto = true"
+          @click="abrirFechar"
         >
           Fechar pedido
         </button>
@@ -331,7 +397,8 @@ async function confirmarExclusao() {
                 class="text-[11px]"
                 :class="estoqueDe(p)! <= 0 ? 'font-semibold text-red-500' : 'text-roxo-300'"
               >
-                Estoque: {{ formatarEstoque(p) }}
+                <template v-if="ehReceita(p)">Dá para: {{ estoqueDe(p) }}</template>
+                <template v-else>Estoque: {{ formatarEstoque(p) }}</template>
               </span>
             </span>
             <span class="text-right">
@@ -371,10 +438,56 @@ async function confirmarExclusao() {
     </UiModal>
 
     <UiModal v-if="modalFecharAberto" titulo="Fechar pedido" @fechar="modalFecharAberto = false">
-      <p class="mb-1 text-sm text-roxo-500">
-        Total a receber: <span class="font-extrabold text-roxo-800">{{ formatarMoeda(pedido.total) }}</span>
-      </p>
       <p class="mb-4 text-[11px] text-roxo-300">Fechando como {{ user?.email }}</p>
+
+      <label class="mb-1 block text-xs font-semibold text-roxo-500">Desconto (opcional)</label>
+      <div class="mb-4 flex items-center gap-2">
+        <div class="flex shrink-0 rounded-xl bg-roxo-50 p-1">
+          <button
+            v-for="t in ([['percentual', '%'], ['valor', 'R$']] as [TipoDesconto, string][])"
+            :key="t[0]"
+            type="button"
+            class="w-10 rounded-lg py-1.5 text-xs font-bold"
+            :class="descontoTipo === t[0] ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+            @click="trocarTipoDesconto(t[0])"
+          >
+            {{ t[1] }}
+          </button>
+        </div>
+        <UiInputMoeda v-if="descontoTipo === 'valor'" v-model="descontoInformado" class="min-w-0 flex-1" placeholder="R$ 0,00" />
+        <div v-else class="flex min-w-0 flex-1 items-center rounded-xl border border-roxo-100 focus-within:border-roxo-400">
+          <input
+            v-model.number="descontoInformado"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            max="100"
+            step="any"
+            class="w-full rounded-xl bg-transparent px-3 py-2.5 text-sm focus:outline-none"
+            placeholder="0"
+          />
+          <span class="pr-3 text-sm font-bold text-roxo-400">%</span>
+        </div>
+      </div>
+
+      <div class="mb-4 space-y-1 rounded-xl bg-roxo-50 p-3 text-sm">
+        <div v-if="valorDesconto" class="flex justify-between text-roxo-500">
+          <span>Subtotal</span>
+          <span>{{ formatarMoeda(pedido.total) }}</span>
+        </div>
+        <div v-if="valorDesconto" class="flex justify-between text-roxo-500">
+          <span>
+            Desconto
+            <template v-if="descontoTipo === 'percentual'">({{ formatarPercentual(Math.min(descontoInformado || 0, 100)) }})</template>
+          </span>
+          <span class="font-semibold text-red-500">-{{ formatarMoeda(valorDesconto) }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="font-bold text-roxo-700">Total a receber</span>
+          <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(totalComDesconto) }}</span>
+        </div>
+      </div>
+
       <label class="mb-1 block text-xs font-semibold text-roxo-500">Forma de pagamento</label>
       <div class="mb-4 grid grid-cols-2 gap-2">
         <button
@@ -387,6 +500,38 @@ async function confirmarExclusao() {
           {{ forma.rotulo }}
         </button>
       </div>
+
+      <template v-if="ehCartao && taxas.bandeiras.length">
+        <label class="mb-1 block text-xs font-semibold text-roxo-500">Bandeira</label>
+        <div class="mb-4 grid grid-cols-3 gap-2">
+          <button
+            v-for="b in taxas.bandeiras"
+            :key="b.id"
+            class="truncate rounded-xl border-2 px-1 py-2 text-xs font-bold"
+            :class="bandeiraId === b.id ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
+            @click="bandeiraId = b.id"
+          >
+            {{ b.nome }}
+          </button>
+        </div>
+      </template>
+
+      <template v-if="formaPagamento === 'credito'">
+        <label class="mb-1 block text-xs font-semibold text-roxo-500">Parcelas</label>
+        <div class="mb-4 grid grid-cols-3 gap-2">
+          <button
+            v-for="n in MAX_PARCELAS"
+            :key="n"
+            class="rounded-xl border-2 py-2 text-xs font-bold"
+            :class="parcelas === n ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
+            @click="parcelas = n"
+          >
+            {{ n }}x
+            <span class="block text-[10px] font-medium">{{ formatarMoeda(totalComDesconto / n) }}</span>
+          </button>
+        </div>
+      </template>
+
       <div v-if="resumoTaxa.valorTaxa" class="mb-4 space-y-1 rounded-xl bg-roxo-50 p-3 text-sm">
         <div class="flex justify-between text-roxo-500">
           <span>Taxa da maquininha ({{ formatarPercentual(resumoTaxa.percentual) }})</span>
@@ -397,6 +542,36 @@ async function confirmarExclusao() {
           <span class="font-extrabold text-roxo-800">{{ formatarMoeda(resumoTaxa.liquido) }}</span>
         </div>
       </div>
+
+      <div class="mb-4 rounded-xl border border-roxo-100 p-3">
+        <label class="flex items-center justify-between text-sm font-bold text-roxo-700">
+          Dividir conta
+          <input v-model="dividirConta" type="checkbox" class="h-5 w-5 accent-roxo-700" />
+        </label>
+        <template v-if="dividirConta">
+          <div class="mt-3 flex items-center gap-2">
+            <span class="text-xs text-roxo-500">Dividir entre</span>
+            <input
+              v-model.number="pessoas"
+              type="number"
+              inputmode="numeric"
+              min="2"
+              step="1"
+              class="w-20 rounded-xl border border-roxo-100 px-3 py-2 text-center text-sm font-bold focus:border-roxo-400 focus:outline-none"
+            />
+            <span class="text-xs text-roxo-500">pessoas</span>
+          </div>
+          <p v-if="divisao" class="mt-3 text-sm text-roxo-600">
+            <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(divisao.porPessoa) }}</span> por pessoa
+            <span v-if="divisao.ultima !== divisao.porPessoa" class="block text-[11px] text-roxo-400">
+              {{ divisao.n - 1 }} pagam {{ formatarMoeda(divisao.porPessoa) }} e 1 paga {{ formatarMoeda(divisao.ultima) }}
+            </span>
+          </p>
+          <p v-else class="mt-2 text-[11px] text-roxo-300">Informe 2 pessoas ou mais.</p>
+        </template>
+      </div>
+
+      <p v-if="erroFechar" class="mb-3 text-sm font-medium text-red-600">{{ erroFechar }}</p>
       <button
         class="w-full rounded-xl bg-roxo-700 py-3 text-sm font-bold text-white disabled:opacity-60"
         :disabled="fechando"

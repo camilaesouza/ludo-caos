@@ -79,6 +79,9 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         <UiStatTile label="Gastos" :value="formatarMoeda(resumo.totalGastos)" />
         <UiStatTile label="Pedidos fechados" :value="String(resumo.totalPedidos)" />
       </div>
+      <p v-if="resumo.totalDescontos" class="-mt-2 px-1 text-[11px] text-roxo-400">
+        {{ formatarMoeda(resumo.totalDescontos) }} em descontos já abatidos de “Em pedidos”. Os valores por produto abaixo são sem desconto.
+      </p>
 
       <div class="rounded-2xl bg-white p-4 shadow-sm">
         <h2 class="mb-3 text-sm font-bold text-roxo-700">Por forma de pagamento</h2>

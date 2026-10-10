@@ -1,6 +1,26 @@
 <script setup lang="ts">
-const { usuarios, subscribe, criarUsuario } = useUsuarios()
+import type { PapelUsuario } from '~/types'
+
+const PAPEIS: { valor: PapelUsuario; rotulo: string; dica: string }[] = [
+  { valor: 'vendedor', rotulo: 'Vendedor', dica: 'Só vê os pedidos: abre, edita, fecha, exclui e consulta os encerrados.' },
+  { valor: 'admin', rotulo: 'Admin', dica: 'Acesso completo: painel, produtos, gastos, caixa, taxas e usuários.' }
+]
+
+const { usuarios, subscribe, criarUsuario, alterarPapel } = useUsuarios()
+const { user } = useAuth()
 subscribe()
+
+const papel = ref<PapelUsuario>('vendedor')
+const alterando = ref<string | null>(null)
+
+async function trocarPapel(uid: string, novo: PapelUsuario) {
+  alterando.value = uid
+  try {
+    await alterarPapel(uid, novo)
+  } finally {
+    alterando.value = null
+  }
+}
 
 const modalAberto = ref(false)
 const email = ref('')
@@ -13,6 +33,7 @@ function abrirNovo() {
   email.value = ''
   senha.value = ''
   confirmarSenha.value = ''
+  papel.value = 'vendedor'
   erro.value = ''
   modalAberto.value = true
 }
@@ -39,7 +60,7 @@ async function salvar() {
 
   salvando.value = true
   try {
-    await criarUsuario(email.value.trim(), senha.value)
+    await criarUsuario(email.value.trim(), senha.value, papel.value)
     modalAberto.value = false
   } catch (e: any) {
     erro.value = mensagemErro(e?.code)
@@ -66,7 +87,7 @@ function formatarData(ts: number) {
     </div>
 
     <p class="text-xs text-roxo-400">
-      Todo usuário criado aqui tem acesso completo ao painel administrativo.
+      Admin tem acesso completo. Vendedor só vê a área de pedidos.
     </p>
 
     <p v-if="!usuarios.length" class="py-10 text-center text-sm text-roxo-300">
@@ -77,14 +98,30 @@ function formatarData(ts: number) {
       <div
         v-for="u in usuarios"
         :key="u.id"
-        class="flex items-center justify-between border-b border-roxo-50 px-4 py-3 last:border-0"
+        class="flex items-center justify-between gap-3 border-b border-roxo-50 px-4 py-3 last:border-0"
       >
-        <div>
-          <p class="text-sm font-semibold text-roxo-800">{{ u.email }}</p>
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold text-roxo-800">{{ u.email }}</p>
           <p class="text-xs text-roxo-400">
             criado em {{ formatarData(u.createdAt) }}<span v-if="u.criadoPor"> por {{ nomeCurto(u.criadoPor) }}</span>
           </p>
         </div>
+        <!-- O papel só pode ser trocado em cadastros com o ID do usuário (os antigos passam a ter no próximo login dele). -->
+        <div v-if="u.uid && u.uid !== user?.uid" class="flex shrink-0 rounded-lg bg-roxo-50 p-0.5">
+          <button
+            v-for="p in PAPEIS"
+            :key="p.valor"
+            class="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+            :class="(u.papel || 'admin') === p.valor ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+            :disabled="alterando === u.uid"
+            @click="(u.papel || 'admin') !== p.valor && trocarPapel(u.uid!, p.valor)"
+          >
+            {{ p.rotulo }}
+          </button>
+        </div>
+        <span v-else class="shrink-0 rounded-lg bg-roxo-50 px-2 py-1 text-[11px] font-bold text-roxo-600">
+          {{ u.papel === 'vendedor' ? 'Vendedor' : 'Admin' }}
+        </span>
       </div>
     </div>
 
@@ -120,6 +157,23 @@ function formatarData(ts: number) {
             minlength="6"
             class="w-full rounded-xl border border-roxo-100 px-3 py-2.5 text-sm focus:border-roxo-400 focus:outline-none"
           />
+        </div>
+
+        <div>
+          <label class="mb-1 block text-xs font-semibold text-roxo-500">Tipo de acesso</label>
+          <div class="flex rounded-xl bg-roxo-50 p-1">
+            <button
+              v-for="p in PAPEIS"
+              :key="p.valor"
+              type="button"
+              class="flex-1 rounded-lg py-2 text-xs font-bold"
+              :class="papel === p.valor ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+              @click="papel = p.valor"
+            >
+              {{ p.rotulo }}
+            </button>
+          </div>
+          <p class="mt-1 text-[11px] text-roxo-300">{{ PAPEIS.find((p) => p.valor === papel)!.dica }}</p>
         </div>
 
         <p v-if="erro" class="text-sm font-medium text-red-600">{{ erro }}</p>

@@ -1,7 +1,7 @@
 export default defineNuxtRouteMiddleware(async (to) => {
   if (!import.meta.client) return
 
-  const { user, ready } = useAuth()
+  const { user, papel, ready } = useAuth()
 
   if (!ready.value) {
     await new Promise<void>((resolve) => {
@@ -22,6 +22,11 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
 
   if (isLoggedIn && isLoginPage) {
-    return navigateTo('/')
+    return navigateTo(papel.value === 'vendedor' ? '/pedidos' : '/')
+  }
+
+  // Vendedor só usa a área de pedidos (abertos e encerrados).
+  if (isLoggedIn && papel.value === 'vendedor' && !to.path.startsWith('/pedidos')) {
+    return navigateTo('/pedidos')
   }
 })
