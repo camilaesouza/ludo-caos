@@ -14,7 +14,17 @@ async function entrar() {
     await login(email.value, senha.value)
     await navigateTo('/')
   } catch (e: any) {
-    erro.value = 'E-mail ou senha inválidos.'
+    console.error('[login]', e)
+    const codigo: string = e?.code || ''
+    if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(codigo)) {
+      erro.value = 'E-mail ou senha inválidos.'
+    } else if (codigo === 'auth/network-request-failed') {
+      erro.value = 'Sem conexão com o servidor. Verifique a internet e tente de novo.'
+    } else if (codigo === 'auth/too-many-requests') {
+      erro.value = 'Muitas tentativas. Aguarde alguns minutos e tente de novo.'
+    } else {
+      erro.value = `Não foi possível entrar${codigo ? ` (${codigo})` : ''}.`
+    }
   } finally {
     carregando.value = false
   }
