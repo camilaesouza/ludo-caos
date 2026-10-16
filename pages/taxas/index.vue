@@ -6,12 +6,11 @@ interface BandeiraForm {
   id: string
   nome: string
   debito: number | string
-  credito: number | string
+  credito: (number | string)[]
 }
 
 const bandeiras = ref<BandeiraForm[]>([])
 const pix = ref<number | string>('')
-const parcelamento = ref<(number | string)[]>([])
 const salvando = ref(false)
 const salvo = ref(false)
 const erro = ref('')
@@ -20,9 +19,8 @@ const erro = ref('')
 watch(
   taxas,
   (t) => {
-    bandeiras.value = t.bandeiras.map((b) => ({ ...b }))
+    bandeiras.value = t.bandeiras.map((b) => ({ ...b, credito: [...b.credito] }))
     pix.value = t.pix
-    parcelamento.value = [...t.parcelamento]
   },
   { immediate: true }
 )
@@ -33,14 +31,14 @@ function paraNumero(v: number | string) {
 }
 
 function adicionarBandeira() {
-  bandeiras.value.push({ id: `b${Date.now()}`, nome: '', debito: '', credito: '' })
+  bandeiras.value.push({ id: `b${Date.now()}`, nome: '', debito: '', credito: Array(MAX_PARCELAS).fill('') })
 }
 
 // Exemplo com a primeira bandeira no crédito em 3x.
 const exemplo = computed(() => {
   const b = bandeiras.value[0]
   if (!b) return null
-  const pct = (paraNumero(b.credito) || 0) + (paraNumero(parcelamento.value[MAX_PARCELAS - 1]) || 0)
+  const pct = paraNumero(b.credito[MAX_PARCELAS - 1] || 0) || 0
   return { nome: b.nome || 'a bandeira', pct, liquido: 300 - arredondarCentavos((300 * pct) / 100) }
 })
 
@@ -55,24 +53,22 @@ async function salvar() {
     id: b.id,
     nome: b.nome.trim(),
     debito: paraNumero(b.debito || 0),
-    credito: paraNumero(b.credito || 0)
+    credito: b.credito.map((c) => paraNumero(c || 0))
   }))
   const pixNum = paraNumero(pix.value || 0)
-  const parcelas = parcelamento.value.map((p) => paraNumero(p || 0))
   if (lista.some((b) => !b.nome)) {
     erro.value = 'Dê um nome para cada bandeira.'
     return
   }
-  if (![pixNum, ...parcelas, ...lista.flatMap((b) => [b.debito, b.credito])].every(taxaValida)) {
+  if (![pixNum, ...lista.flatMap((b) => [b.debito, ...b.credito])].every(taxaValida)) {
     erro.value = 'Informe taxas entre 0 e 100%.'
     return
   }
   salvando.value = true
   try {
     await salvarTaxas({
-      bandeiras: lista.map((b) => ({ ...b, debito: b.debito!, credito: b.credito! })),
-      pix: pixNum!,
-      parcelamento: parcelas.map((p) => p!)
+      bandeiras: lista.map((b) => ({ ...b, debito: b.debito!, credito: b.credito.map((c) => c!) })),
+      pix: pixNum!
     })
     salvo.value = true
   } finally {
@@ -92,44 +88,47 @@ async function salvar() {
 
     <form class="space-y-4" @submit.prevent="salvar">
       <div class="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
-        <h2 class="text-sm font-bold text-roxo-700">Cartão por bandeira</h2>
-        <div class="grid grid-cols-[1fr_4.5rem_4.5rem_1.25rem] items-center gap-2 text-[11px] font-semibold text-roxo-400">
-          <span>Bandeira</span>
-          <span class="text-center">Débito %</span>
-          <span class="text-center">Crédito %</span>
-          <span />
+        <div>
+          <h2 class="text-sm font-bold text-roxo-700">Cartão por bandeira</h2>
+          <p class="text-[11px] text-roxo-400">Taxa do débito e do crédito em cada número de parcelas.</p>
         </div>
-        <div
-          v-for="(b, i) in bandeiras"
-          :key="b.id"
-          class="grid grid-cols-[1fr_4.5rem_4.5rem_1.25rem] items-center gap-2"
-        >
-          <input
-            v-model="b.nome"
-            class="min-w-0 rounded-xl border border-roxo-100 px-3 py-2 text-sm focus:border-roxo-400 focus:outline-none"
-            placeholder="Ex: Amex"
-          />
-          <input
-            v-model="b.debito"
-            type="number"
-            inputmode="decimal"
-            min="0"
-            max="99.99"
-            step="0.01"
-            class="min-w-0 rounded-xl border border-roxo-100 px-2 py-2 text-center text-sm focus:border-roxo-400 focus:outline-none"
-            placeholder="0,00"
-          />
-          <input
-            v-model="b.credito"
-            type="number"
-            inputmode="decimal"
-            min="0"
-            max="99.99"
-            step="0.01"
-            class="min-w-0 rounded-xl border border-roxo-100 px-2 py-2 text-center text-sm focus:border-roxo-400 focus:outline-none"
-            placeholder="0,00"
-          />
-          <button type="button" class="text-red-400" @click="bandeiras.splice(i, 1)">✕</button>
+        <div v-for="(b, i) in bandeiras" :key="b.id" class="space-y-2 rounded-xl border border-roxo-100 p-3">
+          <div class="flex items-center gap-2">
+            <input
+              v-model="b.nome"
+              class="min-w-0 flex-1 rounded-xl border border-roxo-100 px-3 py-2 text-sm font-semibold focus:border-roxo-400 focus:outline-none"
+              placeholder="Ex: Amex"
+            />
+            <button type="button" class="px-1 text-red-400" @click="bandeiras.splice(i, 1)">✕</button>
+          </div>
+          <div class="grid grid-cols-4 gap-2">
+            <div>
+              <label class="mb-1 block text-center text-[11px] font-semibold text-roxo-400">Débito %</label>
+              <input
+                v-model="b.debito"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                max="99.99"
+                step="0.01"
+                class="w-full min-w-0 rounded-xl border border-roxo-100 px-1 py-2 text-center text-sm focus:border-roxo-400 focus:outline-none"
+                placeholder="0,00"
+              />
+            </div>
+            <div v-for="(_, n) in b.credito" :key="n">
+              <label class="mb-1 block text-center text-[11px] font-semibold text-roxo-400">Créd. {{ n + 1 }}x %</label>
+              <input
+                v-model="b.credito[n]"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                max="99.99"
+                step="0.01"
+                class="w-full min-w-0 rounded-xl border border-roxo-100 px-1 py-2 text-center text-sm focus:border-roxo-400 focus:outline-none"
+                placeholder="0,00"
+              />
+            </div>
+          </div>
         </div>
         <button
           type="button"
@@ -138,33 +137,6 @@ async function salvar() {
         >
           + Bandeira
         </button>
-      </div>
-
-      <div class="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div>
-          <h2 class="text-sm font-bold text-roxo-700">Parcelamento no crédito</h2>
-          <p class="text-[11px] text-roxo-400">
-            Acréscimo somado à taxa de crédito da bandeira, conforme o número de parcelas. Vale para todas as bandeiras.
-          </p>
-        </div>
-        <div class="grid grid-cols-3 gap-2">
-          <div v-for="(_, i) in parcelamento" :key="i">
-            <label class="mb-1 block text-center text-xs font-semibold text-roxo-500">{{ i + 1 }}x</label>
-            <div class="flex items-center rounded-xl border border-roxo-100 focus-within:border-roxo-400">
-              <input
-                v-model="parcelamento[i]"
-                type="number"
-                inputmode="decimal"
-                min="0"
-                max="99.99"
-                step="0.01"
-                class="w-full min-w-0 rounded-xl bg-transparent px-2 py-2 text-center text-sm focus:outline-none"
-                placeholder="0,00"
-              />
-              <span class="pr-2 text-xs font-bold text-roxo-400">%</span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div class="space-y-2 rounded-2xl bg-white p-4 shadow-sm">

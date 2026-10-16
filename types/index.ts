@@ -119,14 +119,13 @@ export interface BandeiraCartao {
   id: string
   nome: string
   debito: number // %
-  credito: number // %
+  // Taxa (%) do crédito por número de parcelas: [1x, 2x, 3x].
+  credito: number[]
 }
 
 export interface ConfiguracaoTaxas {
   bandeiras: BandeiraCartao[]
   pix: number // %
-  // Acréscimo (%) somado à taxa de crédito da bandeira, por número de parcelas: [1x, 2x, 3x].
-  parcelamento: number[]
 }
 
 export interface FechamentoCaixa {

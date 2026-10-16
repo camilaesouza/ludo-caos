@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormaPagamento, Produto, TipoDesconto, TipoPreco } from '~/types'
+import type { FormaPagamento, ItemPedido, Produto, TipoDesconto, TipoPreco } from '~/types'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -49,14 +49,120 @@ const divisao = computed(() => {
   return { n, porPessoa, ultima }
 })
 
+// Divisão por itens: cada pessoa escolhe o que vai pagar e, ao confirmar, esses itens saem da lista.
+interface ItemPago {
+  chave: string
+  nome: string
+  preco: number
+  quantidade: number
+  unidade?: ItemPedido['unidade']
+}
+const modoDivisao = ref<'igual' | 'itens'>('igual')
+const pagamentosPorItens = ref<ItemPago[][]>([])
+const selecaoItens = ref<Record<string, number>>({})
+
+// Se os itens do pedido mudarem, a divisão feita até ali deixa de valer.
+const assinaturaItens = computed(() =>
+  (pedido.value?.itens || []).map((i) => `${chaveItem(i)}=${i.quantidade}@${i.preco}`).join('|')
+)
+watch(assinaturaItens, () => {
+  pagamentosPorItens.value = []
+  selecaoItens.value = {}
+})
+
+// Quanto de cada item ainda não foi pago por ninguém.
+const itensRestantes = computed(() =>
+  (pedido.value?.itens || [])
+    .map((item) => {
+      const chave = chaveItem(item)
+      const pago = pagamentosPorItens.value
+        .flat()
+        .filter((i) => i.chave === chave)
+        .reduce((soma, i) => soma + i.quantidade, 0)
+      return { item, chave, restante: arredondarQuantidade(Math.max(item.quantidade - pago, 0)) }
+    })
+    .filter((r) => r.restante > 0)
+)
+
+// O desconto do pedido é repartido na proporção do valor dos itens de cada pessoa.
+function valorDosItens(itens: { preco: number; quantidade: number }[]) {
+  const subtotal = itens.reduce((soma, i) => soma + i.preco * i.quantidade, 0)
+  const total = pedido.value?.total || 0
+  return arredondarCentavos(total ? (subtotal * totalComDesconto.value) / total : 0)
+}
+
+// Valor de cada pessoa que já confirmou. Quando tudo foi pago, a última fica com a sobra dos centavos.
+const valoresPagos = computed(() => {
+  const valores = pagamentosPorItens.value.map(valorDosItens)
+  if (valores.length && !itensRestantes.value.length) {
+    const outros = valores.slice(0, -1).reduce((soma, v) => soma + v, 0)
+    valores[valores.length - 1] = arredondarCentavos(totalComDesconto.value - outros)
+  }
+  return valores
+})
+const faltaPagar = computed(() =>
+  arredondarCentavos(totalComDesconto.value - valoresPagos.value.reduce((soma, v) => soma + v, 0))
+)
+
+const itensSelecionados = computed<ItemPago[]>(() =>
+  itensRestantes.value
+    .filter((r) => selecaoItens.value[r.chave])
+    .map((r) => ({
+      chave: r.chave,
+      nome: r.item.nome,
+      preco: r.item.preco,
+      quantidade: selecaoItens.value[r.chave],
+      unidade: r.item.unidade
+    }))
+)
+const valorSelecionado = computed(() => {
+  const selecionaTudo =
+    itensSelecionados.value.length === itensRestantes.value.length &&
+    itensSelecionados.value.every((s, i) => s.quantidade === itensRestantes.value[i].restante)
+  return selecionaTudo ? faltaPagar.value : valorDosItens(itensSelecionados.value)
+})
+
+// Por unidade, cada toque soma 1; por peso/volume, seleciona ou tira tudo o que falta.
+function tocarItem(r: { item: ItemPedido; chave: string; restante: number }) {
+  const atual = selecaoItens.value[r.chave] || 0
+  const novo = vendidoPorUnidade(r.item) ? Math.min(atual + 1, r.restante) : atual ? 0 : r.restante
+  selecaoItens.value = { ...selecaoItens.value, [r.chave]: novo }
+}
+
+function diminuirItem(chave: string) {
+  const atual = selecaoItens.value[chave] || 0
+  selecaoItens.value = { ...selecaoItens.value, [chave]: Math.max(atual - 1, 0) }
+}
+
+function confirmarPagamentoItens() {
+  if (!itensSelecionados.value.length) return
+  pagamentosPorItens.value = [...pagamentosPorItens.value, itensSelecionados.value]
+  selecaoItens.value = {}
+}
+
+function desfazerPagamento(indice: number) {
+  pagamentosPorItens.value = pagamentosPorItens.value.filter((_, i) => i !== indice)
+}
+
+function resumoItensPagos(itens: ItemPago[]) {
+  return itens
+    .map((i) => ((i.unidade || 'un') === 'un' ? `${i.quantidade}× ${i.nome}` : `${formatarQuantidade(i.quantidade, i.unidade)} ${i.nome}`))
+    .join(', ')
+}
+
 function abrirFechar() {
   formaPagamento.value = 'dinheiro'
   bandeiraId.value = null
   parcelas.value = 1
   descontoTipo.value = 'percentual'
   descontoInformado.value = null
-  dividirConta.value = false
-  pessoas.value = 2
+  // Se já tem gente que pagou pelos itens, mantém a divisão para continuar de onde parou.
+  if (!pagamentosPorItens.value.length) {
+    dividirConta.value = false
+    modoDivisao.value = 'igual'
+    pessoas.value = 2
+  }
+  selecaoItens.value = {}
   erroFechar.value = ''
   modalFecharAberto.value = true
 }
@@ -549,25 +655,111 @@ async function confirmarExclusao() {
           <input v-model="dividirConta" type="checkbox" class="h-5 w-5 accent-roxo-700" />
         </label>
         <template v-if="dividirConta">
-          <div class="mt-3 flex items-center gap-2">
-            <span class="text-xs text-roxo-500">Dividir entre</span>
-            <input
-              v-model.number="pessoas"
-              type="number"
-              inputmode="numeric"
-              min="2"
-              step="1"
-              class="w-20 rounded-xl border border-roxo-100 px-3 py-2 text-center text-sm font-bold focus:border-roxo-400 focus:outline-none"
-            />
-            <span class="text-xs text-roxo-500">pessoas</span>
+          <div class="mt-3 flex rounded-xl bg-roxo-50 p-1">
+            <button
+              v-for="m in ([['igual', 'Partes iguais'], ['itens', 'Por itens']] as const)"
+              :key="m[0]"
+              type="button"
+              class="flex-1 rounded-lg py-1.5 text-xs font-bold"
+              :class="modoDivisao === m[0] ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+              @click="modoDivisao = m[0]"
+            >
+              {{ m[1] }}
+            </button>
           </div>
-          <p v-if="divisao" class="mt-3 text-sm text-roxo-600">
-            <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(divisao.porPessoa) }}</span> por pessoa
-            <span v-if="divisao.ultima !== divisao.porPessoa" class="block text-[11px] text-roxo-400">
-              {{ divisao.n - 1 }} pagam {{ formatarMoeda(divisao.porPessoa) }} e 1 paga {{ formatarMoeda(divisao.ultima) }}
-            </span>
-          </p>
-          <p v-else class="mt-2 text-[11px] text-roxo-300">Informe 2 pessoas ou mais.</p>
+
+          <template v-if="modoDivisao === 'igual'">
+            <div class="mt-3 flex items-center gap-2">
+              <span class="text-xs text-roxo-500">Dividir entre</span>
+              <input
+                v-model.number="pessoas"
+                type="number"
+                inputmode="numeric"
+                min="2"
+                step="1"
+                class="w-20 rounded-xl border border-roxo-100 px-3 py-2 text-center text-sm font-bold focus:border-roxo-400 focus:outline-none"
+              />
+              <span class="text-xs text-roxo-500">pessoas</span>
+            </div>
+            <p v-if="divisao" class="mt-3 text-sm text-roxo-600">
+              <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(divisao.porPessoa) }}</span> por pessoa
+              <span v-if="divisao.ultima !== divisao.porPessoa" class="block text-[11px] text-roxo-400">
+                {{ divisao.n - 1 }} pagam {{ formatarMoeda(divisao.porPessoa) }} e 1 paga {{ formatarMoeda(divisao.ultima) }}
+              </span>
+            </p>
+            <p v-else class="mt-2 text-[11px] text-roxo-300">Informe 2 pessoas ou mais.</p>
+          </template>
+
+          <template v-else>
+            <ul v-if="pagamentosPorItens.length" class="mt-3 space-y-1.5">
+              <li
+                v-for="(itens, i) in pagamentosPorItens"
+                :key="i"
+                class="flex items-start justify-between gap-2 rounded-lg bg-green-50 px-3 py-2"
+              >
+                <div class="min-w-0">
+                  <p class="text-xs font-bold text-green-700">Cliente {{ i + 1 }} · {{ formatarMoeda(valoresPagos[i]) }}</p>
+                  <p class="text-[11px] text-green-600">{{ resumoItensPagos(itens) }}</p>
+                </div>
+                <button type="button" class="shrink-0 text-[11px] font-semibold text-roxo-400" @click="desfazerPagamento(i)">
+                  Desfazer
+                </button>
+              </li>
+            </ul>
+
+            <p v-if="!itensRestantes.length" class="mt-3 text-center text-sm font-semibold text-green-600">
+              Todos os itens foram pagos.
+            </p>
+            <template v-else>
+              <p class="mt-3 text-[11px] text-roxo-400">
+                Cliente {{ pagamentosPorItens.length + 1 }}: toque nos itens que vai pagar.
+              </p>
+              <div class="mt-2 space-y-1.5">
+                <div
+                  v-for="r in itensRestantes"
+                  :key="r.chave"
+                  class="flex cursor-pointer select-none items-center gap-2 rounded-lg border-2 px-3 py-2"
+                  :class="selecaoItens[r.chave] ? 'border-roxo-600 bg-roxo-50' : 'border-roxo-100'"
+                  @click="tocarItem(r)"
+                >
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-xs font-semibold text-roxo-800">{{ r.item.nome }}</p>
+                    <p class="text-[11px] text-roxo-400">
+                      {{ vendidoPorUnidade(r.item) ? `${r.restante} un` : formatarQuantidade(r.restante, r.item.unidade) }}
+                      · {{ formatarMoeda(r.item.preco * r.restante) }}
+                    </p>
+                  </div>
+                  <template v-if="selecaoItens[r.chave]">
+                    <button
+                      v-if="vendidoPorUnidade(r.item)"
+                      type="button"
+                      class="flex h-6 w-6 items-center justify-center rounded-full bg-white text-roxo-600"
+                      @click.stop="diminuirItem(r.chave)"
+                    >
+                      −
+                    </button>
+                    <span class="rounded-full bg-roxo-700 px-2 py-0.5 text-[11px] font-bold text-white">
+                      {{ vendidoPorUnidade(r.item) ? selecaoItens[r.chave] : '✓' }}
+                    </span>
+                  </template>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="mt-3 w-full rounded-xl bg-roxo-100 py-2.5 text-sm font-bold text-roxo-700 disabled:opacity-50"
+                :disabled="!itensSelecionados.length"
+                @click="confirmarPagamentoItens"
+              >
+                Confirmar cliente {{ pagamentosPorItens.length + 1 }} · {{ formatarMoeda(valorSelecionado) }}
+              </button>
+            </template>
+
+            <div class="mt-3 flex justify-between text-sm">
+              <span class="text-roxo-500">Falta pagar</span>
+              <span class="font-extrabold text-roxo-800">{{ formatarMoeda(faltaPagar) }}</span>
+            </div>
+            <p v-if="valorDesconto" class="mt-1 text-[11px] text-roxo-300">Valores já com o desconto repartido.</p>
+          </template>
         </template>
       </div>
 

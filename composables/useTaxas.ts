@@ -10,12 +10,27 @@ export interface PagamentoEscolhido {
 }
 
 const taxasState = () =>
-  useState<ConfiguracaoTaxas>('taxas', () => ({ bandeiras: [], pix: 0, parcelamento: [0, 0, 0] }))
+  useState<ConfiguracaoTaxas>('taxas', () => ({ bandeiras: [], pix: 0 }))
 const taxasLoaded = () => useState<boolean>('taxasLoaded', () => false)
+
+// Formato antigo: um crédito por bandeira e um acréscimo por parcela igual para todas.
+// Vira a taxa de cada parcela na bandeira (crédito + acréscimo).
+function creditoPorParcela(credito: any, parcelamentoAntigo: any): number[] {
+  return Array.from({ length: MAX_PARCELAS }, (_, i) =>
+    Array.isArray(credito)
+      ? Number(credito[i]) || 0
+      : arredondarCentavos((Number(credito) || 0) + (Number(parcelamentoAntigo?.[i]) || 0))
+  )
+}
 
 // Antes as taxas eram só "crédito" e "débito"; elas viram o valor inicial de cada bandeira.
 function bandeirasPadrao(credito: number, debito: number): BandeiraCartao[] {
-  return ['Mastercard', 'Visa', 'Elo'].map((nome) => ({ id: nome.toLowerCase(), nome, credito, debito }))
+  return ['Mastercard', 'Visa', 'Elo'].map((nome) => ({
+    id: nome.toLowerCase(),
+    nome,
+    debito,
+    credito: creditoPorParcela(credito, null)
+  }))
 }
 
 function lerConfiguracao(data: Record<string, any>): ConfiguracaoTaxas {
@@ -24,11 +39,10 @@ function lerConfiguracao(data: Record<string, any>): ConfiguracaoTaxas {
         id: String(b.id),
         nome: String(b.nome || ''),
         debito: Number(b.debito) || 0,
-        credito: Number(b.credito) || 0
+        credito: creditoPorParcela(b.credito, data.parcelamento)
       }))
     : bandeirasPadrao(Number(data.credito) || 0, Number(data.debito) || 0)
-  const parcelamento = Array.from({ length: MAX_PARCELAS }, (_, i) => Number(data.parcelamento?.[i]) || 0)
-  return { bandeiras, pix: Number(data.pix) || 0, parcelamento }
+  return { bandeiras, pix: Number(data.pix) || 0 }
 }
 
 export function useTaxas() {
@@ -50,23 +64,21 @@ export function useTaxas() {
         id: b.id,
         nome: b.nome.trim(),
         debito: arredondarCentavos(b.debito),
-        credito: arredondarCentavos(b.credito)
+        credito: b.credito.map(arredondarCentavos)
       })),
       pix: arredondarCentavos(novas.pix),
-      parcelamento: novas.parcelamento.map(arredondarCentavos),
       atualizadoEm: Date.now()
     })
   }
 
-  // Cartão: taxa da bandeira (+ acréscimo do parcelamento no crédito). Pix tem taxa própria; dinheiro, nenhuma.
+  // Cartão: taxa da bandeira (no crédito, a do número de parcelas). Pix tem taxa própria; dinheiro, nenhuma.
   function taxaDe({ formaPagamento, bandeiraId, parcelas }: PagamentoEscolhido) {
     if (formaPagamento === 'pix') return taxas.value.pix
     if (formaPagamento !== 'credito' && formaPagamento !== 'debito') return 0
     const bandeira = taxas.value.bandeiras.find((b) => b.id === bandeiraId)
     if (!bandeira) return 0
     if (formaPagamento === 'debito') return bandeira.debito
-    const acrescimo = taxas.value.parcelamento[(parcelas || 1) - 1] || 0
-    return arredondarCentavos(bandeira.credito + acrescimo)
+    return bandeira.credito[(parcelas || 1) - 1] || 0
   }
 
   function calcularTaxa(total: number, pagamento: PagamentoEscolhido) {
