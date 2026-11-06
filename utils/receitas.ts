@@ -56,3 +56,14 @@ export function receitasDisponiveis(receita: Pick<Produto, 'ingredientes'>, prod
   }
   return disponivel
 }
+
+// Alerta de estoque baixo, só para produtos contados em unidades ou porções.
+const ESTOQUE_CRITICO = 3
+const ESTOQUE_BAIXO = 5
+
+export function alertaEstoque(p: Pick<Produto, 'estoque' | 'unidade'>): 'critico' | 'baixo' | null {
+  if (typeof p.estoque !== 'number' || (p.unidade || 'un') !== 'un') return null
+  if (p.estoque <= ESTOQUE_CRITICO) return 'critico'
+  if (p.estoque <= ESTOQUE_BAIXO) return 'baixo'
+  return null
+}

@@ -32,11 +32,12 @@ export function useCaixa() {
       totalVendas += p.total
       totalTaxas += p.valorTaxa || 0
       totalDescontos += p.valorDesconto || 0
-      if (p.formaPagamento && p.valorTaxa) {
-        taxasPorForma[p.formaPagamento] = (taxasPorForma[p.formaPagamento] || 0) + p.valorTaxa
-      }
-      if (p.formaPagamento) {
-        formasPagamento[p.formaPagamento] += p.total
+      // Pedido pago em mais de uma forma soma cada parte na sua forma.
+      for (const pg of pagamentosDoPedido(p)) {
+        formasPagamento[pg.formaPagamento] += pg.valor
+        if (pg.valorTaxa) {
+          taxasPorForma[pg.formaPagamento] = (taxasPorForma[pg.formaPagamento] || 0) + pg.valorTaxa
+        }
       }
     }
 

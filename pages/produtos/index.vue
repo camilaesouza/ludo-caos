@@ -39,6 +39,7 @@ const medidaInsumo = ref<UnidadeMedida>('ml')
 const nome = ref('')
 const preco = ref<number | null>(null)
 const precoEvento = ref<number | null>(null)
+const precoCompra = ref<number | null>(null)
 const categoria = ref('')
 const formaVenda = ref<FormaVenda>('unidade')
 // Medida do tamanho da porção ou do produto fracionado.
@@ -55,6 +56,7 @@ function abrirNovo() {
   nome.value = ''
   preco.value = null
   precoEvento.value = null
+  precoCompra.value = null
   categoria.value = ''
   formaVenda.value = 'unidade'
   medida.value = 'g'
@@ -68,6 +70,7 @@ function abrirEdicao(p: Produto) {
   nome.value = p.nome
   preco.value = p.preco
   precoEvento.value = p.precoEvento ?? null
+  precoCompra.value = p.precoCompra ?? null
   categoria.value = p.categoria
   tipo.value = ehReceita(p) ? 'receita' : p.insumo ? 'insumo' : 'produto'
   ingredientes.value = (p.ingredientes || []).map((i) => ({ ...i }))
@@ -136,8 +139,14 @@ const rotuloEstoque = computed(() => {
 })
 
 const rotuloPreco = computed(() => {
-  if (formaVenda.value === 'porcao') return 'Valor por porção'
-  return `Valor normal / ${unidadeContagem.value}`
+  if (formaVenda.value === 'porcao') return 'Valor de venda por porção'
+  return `Valor de venda / ${unidadeContagem.value}`
+})
+
+const rotuloCompra = computed(() => {
+  if (tipo.value === 'insumo') return `Valor de compra/pago / ${medidaInsumo.value} (opcional)`
+  if (formaVenda.value === 'porcao') return 'Valor de compra/pago por porção (opcional)'
+  return `Valor de compra/pago / ${unidadeContagem.value} (opcional)`
 })
 
 // Ex: "5 porções de 200 g = 1 kg"
@@ -180,6 +189,8 @@ async function salvar() {
       nome: nome.value,
       preco: tipo.value === 'insumo' ? 0 : preco.value!,
       precoEvento: tipo.value === 'insumo' ? null : precoEvento.value || null,
+      // Receita não é comprada: o custo vem dos ingredientes.
+      precoCompra: tipo.value === 'receita' ? null : precoCompra.value || null,
       categoria: categoria.value,
       unidade: unidadeContagem.value,
       conteudo: porcao ? conteudoNum.value : null,
@@ -212,15 +223,14 @@ async function confirmarExclusao() {
   produtoParaExcluir.value = null
 }
 
-// Alerta de estoque baixo, só para produtos contados em unidades ou porções.
-const ESTOQUE_CRITICO = 3
-const ESTOQUE_BAIXO = 5
-
-function alertaEstoque(p: Produto): 'critico' | 'baixo' | null {
-  if (typeof p.estoque !== 'number' || (p.unidade || 'un') !== 'un') return null
-  if (p.estoque <= ESTOQUE_CRITICO) return 'critico'
-  if (p.estoque <= ESTOQUE_BAIXO) return 'baixo'
-  return null
+const baixandoPlanilha = ref(false)
+async function baixarPlanilha() {
+  baixandoPlanilha.value = true
+  try {
+    await baixarPlanilhaEstoque(produtos.value)
+  } finally {
+    baixandoPlanilha.value = false
+  }
 }
 
 const soEstoqueBaixo = ref(false)
@@ -242,12 +252,22 @@ const produtosPorCategoria = computed(() => {
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-extrabold text-roxo-800">Produtos</h1>
-      <button
-        class="rounded-xl bg-amarelo-400 px-4 py-2 text-sm font-bold text-roxo-800 shadow-sm"
-        @click="abrirNovo"
-      >
-        + Novo
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          v-if="produtos.length"
+          class="rounded-xl border-2 border-roxo-100 bg-white px-3 py-2 text-xs font-bold text-roxo-600 disabled:opacity-60"
+          :disabled="baixandoPlanilha"
+          @click="baixarPlanilha"
+        >
+          {{ baixandoPlanilha ? 'Gerando...' : 'Baixar planilha' }}
+        </button>
+        <button
+          class="rounded-xl bg-amarelo-400 px-4 py-2 text-sm font-bold text-roxo-800 shadow-sm"
+          @click="abrirNovo"
+        >
+          + Novo
+        </button>
+      </div>
     </div>
 
     <button
@@ -293,10 +313,14 @@ const produtosPorCategoria = computed(() => {
               />
               {{ nomeProduto(p) }}
             </p>
-            <p v-if="p.insumo" class="text-xs text-roxo-400">Insumo</p>
+            <p v-if="p.insumo" class="text-xs text-roxo-400">
+              Insumo
+              <span v-if="p.precoCompra"> · compra {{ formatarMoeda(p.precoCompra) }}/{{ p.unidade || 'un' }}</span>
+            </p>
             <p v-else class="text-xs text-roxo-400">
               {{ formatarMoeda(p.preco) }}/{{ ehPorcao(p) ? 'porção' : p.unidade || 'un' }}
               <span v-if="p.precoEvento"> · evento {{ formatarMoeda(p.precoEvento) }}</span>
+              <span v-if="p.precoCompra"> · compra {{ formatarMoeda(p.precoCompra) }}</span>
             </p>
             <p v-if="ehReceita(p)" class="text-[11px] font-medium text-roxo-300">
               Receita · {{ p.ingredientes!.length }} {{ p.ingredientes!.length === 1 ? 'ingrediente' : 'ingredientes' }}
@@ -470,13 +494,17 @@ const produtosPorCategoria = computed(() => {
           </button>
         </div>
 
+        <div v-if="tipo !== 'receita'">
+          <label class="mb-1 block text-xs font-semibold text-roxo-500">{{ rotuloCompra }}</label>
+          <UiInputMoeda v-model="precoCompra" />
+        </div>
         <div v-if="tipo !== 'insumo'" class="grid grid-cols-2 gap-3">
           <div>
             <label class="mb-1 block text-xs font-semibold text-roxo-500">{{ rotuloPreco }}</label>
             <UiInputMoeda v-model="preco" required />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-semibold text-roxo-500">Valor evento (opcional)</label>
+            <label class="mb-1 block text-xs font-semibold text-roxo-500">Valor em evento (opcional)</label>
             <UiInputMoeda v-model="precoEvento" />
           </div>
         </div>

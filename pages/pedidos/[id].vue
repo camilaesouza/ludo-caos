@@ -17,27 +17,60 @@ const pedido = pedidoPorId(id)
 const modalProdutosAberto = ref(false)
 const modalFecharAberto = ref(false)
 const modalExcluirAberto = ref(false)
-const formaPagamento = ref<FormaPagamento>('dinheiro')
-const bandeiraId = ref<string | null>(null)
-const parcelas = ref(1)
+// Formas de pagamento do fechamento. Com mais de uma, cada uma tem seu valor e a última fica com o restante.
+interface LinhaPagamento {
+  id: number
+  formaPagamento: FormaPagamento
+  bandeiraId: string | null
+  parcelas: number
+  valor: number | null
+}
+let proximaLinha = 0
+const novaLinha = (formaPagamento: FormaPagamento = 'dinheiro'): LinhaPagamento => ({
+  id: proximaLinha++,
+  formaPagamento,
+  bandeiraId: null,
+  parcelas: 1,
+  valor: null
+})
+const pagamentos = ref<LinhaPagamento[]>([novaLinha()])
 const descontoTipo = ref<TipoDesconto>('percentual')
 const descontoInformado = ref<number | null>(null)
 const dividirConta = ref(false)
 const pessoas = ref<number | null>(2)
 const erroFechar = ref('')
 
-const ehCartao = computed(() => formaPagamento.value === 'credito' || formaPagamento.value === 'debito')
+const ehCartao = (forma: FormaPagamento) => forma === 'credito' || forma === 'debito'
 const valorDesconto = computed(() =>
   calcularDesconto(pedido.value?.total || 0, descontoTipo.value, descontoInformado.value)
 )
 const totalComDesconto = computed(() => arredondarCentavos((pedido.value?.total || 0) - valorDesconto.value))
-const resumoTaxa = computed(() =>
-  calcularTaxa(totalComDesconto.value, {
-    formaPagamento: formaPagamento.value,
-    bandeiraId: bandeiraId.value,
-    parcelas: parcelas.value
+// Valor de cada forma: nas anteriores, o que foi digitado; na última, o que sobrar.
+const valoresPagamento = computed(() => {
+  let restante = totalComDesconto.value
+  return pagamentos.value.map((pg, i) => {
+    const valor = arredondarCentavos(i === pagamentos.value.length - 1 ? restante : pg.valor || 0)
+    restante -= valor
+    return valor
   })
+})
+const taxasPagamento = computed(() =>
+  pagamentos.value.map((pg, i) => calcularTaxa(valoresPagamento.value[i], pg))
 )
+const resumoTaxa = computed(() => {
+  const valorTaxa = arredondarCentavos(taxasPagamento.value.reduce((soma, t) => soma + t.valorTaxa, 0))
+  return { valorTaxa, liquido: arredondarCentavos(totalComDesconto.value - valorTaxa) }
+})
+
+function adicionarForma() {
+  const ultima = pagamentos.value[pagamentos.value.length - 1]
+  pagamentos.value.push(novaLinha(ultima?.formaPagamento === 'dinheiro' ? 'credito' : 'dinheiro'))
+}
+
+function removerForma(indice: number) {
+  pagamentos.value.splice(indice, 1)
+  if (pagamentos.value.length === 1) pagamentos.value[0].valor = null
+}
 
 // Divide em centavos inteiros; quando não fecha exato, a diferença fica com a última pessoa.
 const divisao = computed(() => {
@@ -151,9 +184,7 @@ function resumoItensPagos(itens: ItemPago[]) {
 }
 
 function abrirFechar() {
-  formaPagamento.value = 'dinheiro'
-  bandeiraId.value = null
-  parcelas.value = 1
+  pagamentos.value = [novaLinha()]
   descontoTipo.value = 'percentual'
   descontoInformado.value = null
   // Se já tem gente que pagou pelos itens, mantém a divisão para continuar de onde parou.
@@ -278,16 +309,23 @@ async function adicionarValorAvulso() {
 
 async function confirmarFechamento() {
   erroFechar.value = ''
-  if (ehCartao.value && taxas.value.bandeiras.length && !bandeiraId.value) {
+  if (pagamentos.value.some((pg) => ehCartao(pg.formaPagamento) && taxas.value.bandeiras.length && !pg.bandeiraId)) {
     erroFechar.value = 'Escolha a bandeira do cartão.'
+    return
+  }
+  if (pagamentos.value.length > 1 && valoresPagamento.value.some((v) => v <= 0)) {
+    erroFechar.value = 'Informe o valor de cada forma. A soma não pode passar do total.'
     return
   }
   fechando.value = true
   try {
     await fecharPedido(id, {
-      formaPagamento: formaPagamento.value,
-      bandeiraId: ehCartao.value ? bandeiraId.value : null,
-      parcelas: formaPagamento.value === 'credito' ? parcelas.value : null,
+      pagamentos: pagamentos.value.map((pg, i) => ({
+        formaPagamento: pg.formaPagamento,
+        bandeiraId: ehCartao(pg.formaPagamento) ? pg.bandeiraId : null,
+        parcelas: pg.formaPagamento === 'credito' ? pg.parcelas : null,
+        valor: valoresPagamento.value[i]
+      })),
       descontoTipo: valorDesconto.value ? descontoTipo.value : null,
       descontoInformado: valorDesconto.value
         ? descontoTipo.value === 'percentual'
@@ -297,6 +335,8 @@ async function confirmarFechamento() {
     })
     modalFecharAberto.value = false
     await navigateTo('/pedidos')
+  } catch (e: any) {
+    erroFechar.value = e?.message || 'Não foi possível fechar o pedido.'
   } finally {
     fechando.value = false
   }
@@ -595,54 +635,97 @@ async function confirmarExclusao() {
       </div>
 
       <label class="mb-1 block text-xs font-semibold text-roxo-500">Forma de pagamento</label>
-      <div class="mb-4 grid grid-cols-2 gap-2">
-        <button
-          v-for="forma in FORMAS_PAGAMENTO"
-          :key="forma.valor"
-          class="rounded-xl border-2 py-2.5 text-xs font-bold"
-          :class="formaPagamento === forma.valor ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
-          @click="formaPagamento = forma.valor"
+      <div class="mb-4 space-y-3">
+        <div
+          v-for="(pg, i) in pagamentos"
+          :key="pg.id"
+          :class="pagamentos.length > 1 ? 'rounded-xl border border-roxo-100 p-3' : ''"
         >
-          {{ forma.rotulo }}
+          <div v-if="pagamentos.length > 1" class="mb-2 flex items-center justify-between">
+            <span class="text-xs font-bold text-roxo-700">{{ i + 1 }}ª forma</span>
+            <button type="button" class="text-[11px] font-semibold text-red-500" @click="removerForma(i)">Remover</button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="forma in FORMAS_PAGAMENTO"
+              :key="forma.valor"
+              type="button"
+              class="rounded-xl border-2 py-2.5 text-xs font-bold"
+              :class="pg.formaPagamento === forma.valor ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
+              @click="pg.formaPagamento = forma.valor"
+            >
+              {{ forma.rotulo }}
+            </button>
+          </div>
+
+          <template v-if="ehCartao(pg.formaPagamento) && taxas.bandeiras.length">
+            <label class="mb-1 mt-3 block text-xs font-semibold text-roxo-500">Bandeira</label>
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                v-for="b in taxas.bandeiras"
+                :key="b.id"
+                type="button"
+                class="truncate rounded-xl border-2 px-1 py-2 text-xs font-bold"
+                :class="pg.bandeiraId === b.id ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
+                @click="pg.bandeiraId = b.id"
+              >
+                {{ b.nome }}
+              </button>
+            </div>
+          </template>
+
+          <template v-if="pg.formaPagamento === 'credito'">
+            <label class="mb-1 mt-3 block text-xs font-semibold text-roxo-500">Parcelas</label>
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                v-for="n in MAX_PARCELAS"
+                :key="n"
+                type="button"
+                class="rounded-xl border-2 py-2 text-xs font-bold"
+                :class="pg.parcelas === n ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
+                @click="pg.parcelas = n"
+              >
+                {{ n }}x
+                <span class="block text-[10px] font-medium">{{ formatarMoeda(valoresPagamento[i] / n) }}</span>
+              </button>
+            </div>
+          </template>
+
+          <template v-if="pagamentos.length > 1">
+            <div v-if="i < pagamentos.length - 1" class="mt-3">
+              <label class="mb-1 block text-xs font-semibold text-roxo-500">Valor nessa forma</label>
+              <UiInputMoeda v-model="pg.valor" placeholder="R$ 0,00" />
+            </div>
+            <div v-else class="mt-3 flex justify-between rounded-lg bg-roxo-50 px-3 py-2 text-sm">
+              <span class="text-roxo-500">Restante nessa forma</span>
+              <span class="font-bold" :class="valoresPagamento[i] > 0 ? 'text-roxo-800' : 'text-red-500'">
+                {{ formatarMoeda(valoresPagamento[i]) }}
+              </span>
+            </div>
+          </template>
+        </div>
+
+        <button
+          type="button"
+          class="w-full rounded-xl border-2 border-dashed border-roxo-200 py-2 text-xs font-bold text-roxo-500"
+          @click="adicionarForma"
+        >
+          + Pagar parte em outra forma
         </button>
       </div>
 
-      <template v-if="ehCartao && taxas.bandeiras.length">
-        <label class="mb-1 block text-xs font-semibold text-roxo-500">Bandeira</label>
-        <div class="mb-4 grid grid-cols-3 gap-2">
-          <button
-            v-for="b in taxas.bandeiras"
-            :key="b.id"
-            class="truncate rounded-xl border-2 px-1 py-2 text-xs font-bold"
-            :class="bandeiraId === b.id ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
-            @click="bandeiraId = b.id"
-          >
-            {{ b.nome }}
-          </button>
-        </div>
-      </template>
-
-      <template v-if="formaPagamento === 'credito'">
-        <label class="mb-1 block text-xs font-semibold text-roxo-500">Parcelas</label>
-        <div class="mb-4 grid grid-cols-3 gap-2">
-          <button
-            v-for="n in MAX_PARCELAS"
-            :key="n"
-            class="rounded-xl border-2 py-2 text-xs font-bold"
-            :class="parcelas === n ? 'border-roxo-600 bg-roxo-50 text-roxo-700' : 'border-roxo-100 text-roxo-400'"
-            @click="parcelas = n"
-          >
-            {{ n }}x
-            <span class="block text-[10px] font-medium">{{ formatarMoeda(totalComDesconto / n) }}</span>
-          </button>
-        </div>
-      </template>
-
       <div v-if="resumoTaxa.valorTaxa" class="mb-4 space-y-1 rounded-xl bg-roxo-50 p-3 text-sm">
-        <div class="flex justify-between text-roxo-500">
-          <span>Taxa da maquininha ({{ formatarPercentual(resumoTaxa.percentual) }})</span>
-          <span class="font-semibold text-red-500">-{{ formatarMoeda(resumoTaxa.valorTaxa) }}</span>
-        </div>
+        <template v-for="(t, i) in taxasPagamento" :key="pagamentos[i].id">
+          <div v-if="t.valorTaxa" class="flex justify-between text-roxo-500">
+            <span>
+              Taxa da maquininha
+              <template v-if="pagamentos.length > 1">· {{ rotuloFormaPagamento(pagamentos[i].formaPagamento) }}</template>
+              ({{ formatarPercentual(t.percentual) }})
+            </span>
+            <span class="font-semibold text-red-500">-{{ formatarMoeda(t.valorTaxa) }}</span>
+          </div>
+        </template>
         <div class="flex justify-between">
           <span class="font-bold text-roxo-700">Valor que entra no caixa</span>
           <span class="font-extrabold text-roxo-800">{{ formatarMoeda(resumoTaxa.liquido) }}</span>

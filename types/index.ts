@@ -16,6 +16,8 @@ export interface Produto {
   nome: string
   preco: number
   precoEvento?: number | null
+  // Quanto foi pago na compra (por unidade/porção/medida do estoque). Só informativo.
+  precoCompra?: number | null
   categoria: string
   unidade?: UnidadeMedida
   // Produto vendido em porções/embalagens (ex: batata em porções de 200 g):
@@ -66,6 +68,16 @@ export type StatusPedido = 'aberto' | 'fechado'
 // 'cartao' é o valor antigo, de antes de separar crédito e débito.
 export type FormaPagamento = 'dinheiro' | 'credito' | 'debito' | 'pix' | 'cartao'
 
+// Uma das formas usadas para pagar o pedido (ex: R$ 15 em dinheiro e o resto no crédito).
+export interface PagamentoPedido {
+  formaPagamento: FormaPagamento
+  valor: number
+  bandeira?: string | null
+  parcelas?: number | null
+  taxaPercentual?: number
+  valorTaxa?: number
+}
+
 export interface Pedido {
   id: string
   numero: string
@@ -89,6 +101,9 @@ export interface Pedido {
   descontoTipo?: TipoDesconto | null
   descontoInformado?: number
   valorDesconto?: number
+  // Formas usadas no pagamento. Pedidos antigos não têm: valem formaPagamento/bandeira/parcelas.
+  // Com mais de uma forma, `formaPagamento` guarda a de maior valor e `valorTaxa` a soma das taxas.
+  pagamentos?: PagamentoPedido[]
 }
 
 export type TipoDesconto = 'percentual' | 'valor'

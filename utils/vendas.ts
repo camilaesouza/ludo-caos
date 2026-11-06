@@ -1,4 +1,13 @@
-import type { CategoriaVendida, Pedido, ProdutoVendido, TipoDesconto } from '~/types'
+import type { CategoriaVendida, ItemPedido, PagamentoPedido, Pedido, ProdutoVendido, TipoDesconto } from '~/types'
+
+// Categoria de um item vendido: a gravada no item ou, em itens antigos, a atual do produto.
+export function categoriaDoItem(item: ItemPedido, categoriaDoProduto: (id: string) => string | undefined) {
+  return (
+    item.categoria ||
+    (item.produtoId.startsWith('avulso-') ? 'Avulsos' : categoriaDoProduto(item.produtoId)) ||
+    'Sem categoria'
+  )
+}
 
 // Soma os itens de todos os pedidos, agrupando por categoria e depois por produto.
 // Por padrão, vendas com valor normal e valor de evento do mesmo produto ficam em linhas
@@ -11,10 +20,7 @@ export function agruparPorCategoria(
   const categorias = new Map<string, Map<string, ProdutoVendido>>()
   for (const pedido of pedidos) {
     for (const item of pedido.itens) {
-      const categoria =
-        item.categoria ||
-        (item.produtoId.startsWith('avulso-') ? 'Avulsos' : categoriaDoProduto(item.produtoId)) ||
-        'Sem categoria'
+      const categoria = categoriaDoItem(item, categoriaDoProduto)
       // Avulsos agrupam pelo nome, já que cada um tem um id único.
       const chave = item.produtoId.startsWith('avulso-')
         ? `avulso:${item.nome}`
@@ -50,10 +56,34 @@ export function calcularDesconto(subtotal: number, tipo: TipoDesconto | null, va
   return arredondarCentavos(Math.min(desconto, subtotal))
 }
 
+// Formas usadas no pagamento. Pedidos de antes do pagamento dividido viram uma forma só, com o total.
+export function pagamentosDoPedido(p: Pedido): PagamentoPedido[] {
+  if (p.pagamentos?.length) return p.pagamentos
+  if (!p.formaPagamento) return []
+  return [
+    {
+      formaPagamento: p.formaPagamento,
+      valor: p.total,
+      bandeira: p.bandeira ?? null,
+      parcelas: p.parcelas ?? null,
+      taxaPercentual: p.taxaPercentual || 0,
+      valorTaxa: p.valorTaxa || 0
+    }
+  ]
+}
+
 // Ex: "Cartão crédito · Visa · 3x"
-export function descricaoPagamento(p: Pick<Pedido, 'formaPagamento' | 'bandeira' | 'parcelas'>) {
+function descricaoForma(p: Pick<PagamentoPedido, 'formaPagamento' | 'bandeira' | 'parcelas'>) {
   const partes = [rotuloFormaPagamento(p.formaPagamento)]
   if (p.bandeira) partes.push(p.bandeira)
   if (p.formaPagamento === 'credito' && p.parcelas) partes.push(`${p.parcelas}x`)
   return partes.join(' · ')
+}
+
+// Uma forma: "Pix". Várias: "Dinheiro R$ 15,00 + Cartão crédito · Visa · 1x R$ 35,00".
+export function descricaoPagamento(p: Pedido) {
+  const pagamentos = pagamentosDoPedido(p)
+  if (!pagamentos.length) return rotuloFormaPagamento(null)
+  if (pagamentos.length === 1) return descricaoForma(pagamentos[0])
+  return pagamentos.map((pg) => `${descricaoForma(pg)} ${formatarMoeda(pg.valor)}`).join(' + ')
 }

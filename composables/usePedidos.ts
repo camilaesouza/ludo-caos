@@ -14,10 +14,16 @@ import {
   writeBatch,
   increment
 } from 'firebase/firestore'
-import type { Pedido, ItemPedido, TipoDesconto } from '~/types'
+import type { Pedido, ItemPedido, PagamentoPedido, TipoDesconto } from '~/types'
 import type { PagamentoEscolhido } from './useTaxas'
 
-export interface FechamentoPedido extends PagamentoEscolhido {
+export interface PagamentoFechamento extends PagamentoEscolhido {
+  // Valor pago nessa forma. Na última forma é ignorado: ela fica com o que faltar.
+  valor: number | null
+}
+
+export interface FechamentoPedido {
+  pagamentos: PagamentoFechamento[]
   descontoTipo: TipoDesconto | null
   descontoInformado: number | null
 }
@@ -171,22 +177,45 @@ export function usePedidos() {
     const subtotal = calcularTotal(pedido?.itens || [])
     const valorDesconto = calcularDesconto(subtotal, dados.descontoTipo, dados.descontoInformado)
     const total = arredondarCentavos(subtotal - valorDesconto)
-    const ehCartao = dados.formaPagamento === 'credito' || dados.formaPagamento === 'debito'
-    const bandeira = ehCartao ? taxas.value.bandeiras.find((b) => b.id === dados.bandeiraId) : null
-    const parcelas = dados.formaPagamento === 'credito' ? dados.parcelas || 1 : null
+    if (!dados.pagamentos.length) throw new Error('Escolha a forma de pagamento.')
     // Taxa e desconto ficam gravados no pedido: mudar a taxa depois não altera vendas já fechadas.
-    const { percentual, valorTaxa } = calcularTaxa(total, { ...dados, parcelas })
+    let restante = total
+    const pagamentos: PagamentoPedido[] = dados.pagamentos.map((pg, i) => {
+      const ultimo = i === dados.pagamentos.length - 1
+      const valor = ultimo ? arredondarCentavos(restante) : arredondarCentavos(pg.valor || 0)
+      restante -= valor
+      const ehCartao = pg.formaPagamento === 'credito' || pg.formaPagamento === 'debito'
+      const bandeira = ehCartao ? taxas.value.bandeiras.find((b) => b.id === pg.bandeiraId) : null
+      const parcelas = pg.formaPagamento === 'credito' ? pg.parcelas || 1 : null
+      const { percentual, valorTaxa } = calcularTaxa(valor, { ...pg, parcelas })
+      return {
+        formaPagamento: pg.formaPagamento,
+        valor,
+        bandeira: bandeira?.nome || null,
+        parcelas,
+        taxaPercentual: percentual,
+        valorTaxa
+      }
+    })
+    if (pagamentos.length > 1 && pagamentos.some((pg) => pg.valor <= 0)) {
+      throw new Error('Os valores das formas de pagamento precisam somar o total do pedido.')
+    }
+    // Campos de uma forma só ficam com a de maior valor, para quem ainda lê o formato antigo.
+    const principal = pagamentos.reduce((a, b) => (b.valor > a.valor ? b : a))
+    const valorTaxa = arredondarCentavos(pagamentos.reduce((soma, pg) => soma + (pg.valorTaxa || 0), 0))
+    const unica = pagamentos.length === 1
     await updateDoc(doc($db as any, 'pedidos', pedidoId), {
       status: 'fechado',
-      formaPagamento: dados.formaPagamento,
-      bandeira: bandeira?.nome || null,
-      parcelas,
+      formaPagamento: principal.formaPagamento,
+      bandeira: unica ? principal.bandeira : null,
+      parcelas: unica ? principal.parcelas : null,
+      pagamentos,
       subtotal,
       descontoTipo: valorDesconto ? dados.descontoTipo : null,
       descontoInformado: valorDesconto ? dados.descontoInformado : 0,
       valorDesconto,
       total,
-      taxaPercentual: percentual,
+      taxaPercentual: unica ? principal.taxaPercentual : total ? arredondarCentavos((valorTaxa / total) * 100) : 0,
       valorTaxa,
       fechadoEm: Date.now(),
       fechadoPor: user.value?.email || ''
@@ -227,6 +256,7 @@ export function usePedidos() {
       valorTaxa: 0,
       bandeira: null,
       parcelas: null,
+      pagamentos: [],
       // Volta ao valor cheio; o desconto é escolhido de novo ao fechar.
       total: calcularTotal(pedido.itens),
       subtotal: calcularTotal(pedido.itens),

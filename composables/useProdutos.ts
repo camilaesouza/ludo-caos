@@ -34,6 +34,7 @@ export function useProdutos() {
       | 'nome'
       | 'preco'
       | 'precoEvento'
+      | 'precoCompra'
       | 'categoria'
       | 'unidade'
       | 'conteudo'
