@@ -3,6 +3,7 @@ const { user, ehAdmin, logout } = useAuth()
 const menuAberto = ref(false)
 
 const itensMenu = [
+  { to: '/assinantes', label: 'Assinantes' },
   { to: '/usuarios', label: 'Usuários' },
   { to: '/taxas', label: 'Taxas de cartão' }
 ]

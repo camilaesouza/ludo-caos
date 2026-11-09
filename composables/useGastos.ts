@@ -117,8 +117,15 @@ export function useGastos() {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Gasto))
   }
 
+  // Todos os gastos que já contam até `fimISO` (parcelas futuras ficam de fora).
+  async function buscarGastosAte(fimISO: string): Promise<Gasto[]> {
+    const snap = await getDocs(query(collection($db as any, 'gastos'), where('data', '<=', fimISO)))
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Gasto))
+  }
+
   return {
     gastos: lista,
+    buscarGastosAte,
     subscribe,
     criarGasto,
     criarCompraParcelada,

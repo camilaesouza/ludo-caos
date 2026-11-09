@@ -1,8 +1,11 @@
 <script setup lang="ts" generic="T extends string">
 // Select com visual do app (o nativo/datalist aparece escuro em alguns celulares).
 // Com `criavel`, o campo aceita digitar um valor que ainda não está na lista.
+// Com `buscavel`, dá para digitar para filtrar, mas só vale escolher uma opção da lista.
 const model = defineModel<T>({ default: '' as T })
-const props = defineProps<{ opcoes: { valor: T; rotulo: string }[]; placeholder?: string; criavel?: boolean }>()
+const props = defineProps<{ opcoes: { valor: T; rotulo: string }[]; placeholder?: string; criavel?: boolean; buscavel?: boolean }>()
+
+const digitavel = computed(() => props.criavel || props.buscavel)
 
 const aberto = ref(false)
 const busca = ref('')
@@ -13,9 +16,9 @@ const rotuloAtual = computed(
 )
 
 const filtradas = computed(() => {
-  if (!props.criavel || !busca.value.trim()) return props.opcoes
-  const termo = busca.value.trim().toLowerCase()
-  return props.opcoes.filter((o) => o.rotulo.toLowerCase().includes(termo))
+  if (!digitavel.value || !busca.value.trim()) return props.opcoes
+  const termo = normalizarBusca(busca.value)
+  return props.opcoes.filter((o) => normalizarBusca(o.rotulo).includes(termo))
 })
 
 const podeCriar = computed(() => {
@@ -40,7 +43,7 @@ function escolher(valor: string) {
 
 function aoDigitar(e: Event) {
   busca.value = (e.target as HTMLInputElement).value
-  model.value = busca.value as T
+  if (props.criavel) model.value = busca.value as T
   aberto.value = true
 }
 
@@ -59,8 +62,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', aoClicarFora))
       :class="aberto ? 'border-roxo-400 ring-2 ring-roxo-100' : 'border-roxo-100'"
     >
       <input
-        v-if="criavel"
-        :value="aberto ? busca : model"
+        v-if="digitavel"
+        :value="aberto ? busca : criavel ? model : rotuloAtual"
         class="w-full rounded-xl bg-transparent px-3 py-2.5 text-roxo-800 placeholder:text-roxo-300 focus:outline-none"
         :placeholder="placeholder"
         @focus="abrir"
@@ -99,7 +102,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', aoClicarFora))
     </div>
 
     <ul
-      v-if="aberto && (filtradas.length || podeCriar)"
+      v-if="aberto && (filtradas.length || podeCriar || buscavel)"
       class="absolute inset-x-0 top-full z-10 mt-1 max-h-56 overflow-y-auto rounded-xl border border-roxo-100 bg-white py-1 shadow-lg"
     >
       <li v-for="o in filtradas" :key="o.valor">
@@ -113,6 +116,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', aoClicarFora))
           <span v-if="o.valor === model" class="text-roxo-500">✓</span>
         </button>
       </li>
+      <li v-if="buscavel && !filtradas.length" class="px-3 py-2 text-sm text-roxo-300">Nenhum resultado</li>
       <li v-if="podeCriar" class="border-t border-roxo-50">
         <button
           type="button"

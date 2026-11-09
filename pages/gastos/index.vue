@@ -3,6 +3,66 @@ import type { FormaPagamento, Gasto, TipoCompra } from '~/types'
 
 const { gastos, subscribe, criarGasto, criarCompraParcelada, removerGasto, removerCompra } = useGastos()
 subscribe()
+const { entradas, subscribe: subscribeEntradas } = useEntradas()
+subscribeEntradas()
+const { saldoAte, resumoDoPeriodo } = useCaixa()
+
+// Planilha do fluxo de caixa, com período próprio. Começa no mês atual.
+const modalPlanilha = ref(false)
+const planilhaInicio = ref(hojeLocalISO())
+const planilhaFim = ref(hojeLocalISO())
+const gerandoPlanilha = ref(false)
+const erroPlanilha = ref('')
+
+function abrirPlanilha() {
+  planilhaInicio.value = `${hojeLocalISO().slice(0, 8)}01`
+  planilhaFim.value = hojeLocalISO()
+  erroPlanilha.value = ''
+  modalPlanilha.value = true
+}
+
+function aoMudarPlanilhaInicio(e: Event) {
+  const v = (e.target as HTMLInputElement).value
+  if (!v) return
+  planilhaInicio.value = v
+  if (planilhaFim.value < v) planilhaFim.value = v
+}
+
+function aoMudarPlanilhaFim(e: Event) {
+  const v = (e.target as HTMLInputElement).value
+  if (!v) return
+  planilhaFim.value = v
+  if (planilhaInicio.value > v) planilhaInicio.value = v
+}
+
+async function baixarPlanilha() {
+  erroPlanilha.value = ''
+  gerandoPlanilha.value = true
+  try {
+    const dados = await resumoDoPeriodo(planilhaInicio.value, planilhaFim.value)
+    await baixarPlanilhaFluxo(dados, planilhaInicio.value, planilhaFim.value)
+    modalPlanilha.value = false
+  } catch (e: any) {
+    erroPlanilha.value = e?.message || 'Não foi possível gerar a planilha.'
+  } finally {
+    gerandoPlanilha.value = false
+  }
+}
+
+const aba = ref<'saidas' | 'entradas'>('saidas')
+
+// Saldo de hoje: tudo o que entrou (entradas + vendas) menos o que saiu, desde o começo.
+const saldoHoje = ref<number | null>(null)
+async function carregarSaldo() {
+  try {
+    saldoHoje.value = await saldoAte(hojeLocalISO())
+  } catch (e) {
+    console.error('[fluxo] Não foi possível calcular o saldo:', e)
+  }
+}
+onMounted(carregarSaldo)
+// Recalcula quando gastos ou entradas mudam (inclusive em outro aparelho).
+watch([() => gastos.value.length, () => entradas.value.length], carregarSaldo)
 
 const NOMES_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 // A primeira parcela pode cair no mês da compra ou em até 5 meses depois.
@@ -167,59 +227,130 @@ const gastosPorData = computed(() => {
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <h1 class="text-xl font-extrabold text-roxo-800">Gastos</h1>
+      <h1 class="text-xl font-extrabold text-roxo-800">Fluxo de caixa</h1>
       <button
-        class="rounded-xl bg-amarelo-400 px-4 py-2 text-sm font-bold text-roxo-800 shadow-sm"
-        @click="abrirNovo"
+        type="button"
+        class="shrink-0 rounded-xl border-2 border-roxo-100 bg-white px-3 py-2 text-xs font-bold text-roxo-600"
+        @click="abrirPlanilha"
       >
-        + Novo
+        Baixar planilha
       </button>
     </div>
 
-    <p v-if="!gastos.length" class="py-10 text-center text-sm text-roxo-300">
-      Nenhum gasto registrado ainda.
-    </p>
+    <div class="rounded-2xl bg-roxo-700 p-4 text-white shadow-sm">
+      <p class="text-xs font-medium text-amarelo-300">Saldo em caixa hoje</p>
+      <p class="mt-1 text-2xl font-extrabold" :class="{ 'text-red-300': (saldoHoje ?? 0) < 0 }">
+        {{ saldoHoje === null ? '...' : formatarMoeda(saldoHoje) }}
+      </p>
+      <p class="mt-1 text-[11px] text-roxo-200">
+        Entradas + vendas (com gorjetas, menos taxas de cartão) − gastos, desde o começo.
+        <NuxtLink to="/caixa" class="font-semibold underline">Ver por período</NuxtLink>
+      </p>
+    </div>
 
-    <div v-for="[dataGrupo, itens] in gastosPorData" :key="dataGrupo" class="space-y-2">
-      <h2 class="text-xs font-bold uppercase tracking-wide text-roxo-400">{{ formatarDataCurta(dataGrupo) }}</h2>
-      <div class="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <div
-          v-for="g in itens"
-          :key="g.id"
-          class="flex items-center justify-between border-b border-roxo-50 px-4 py-3 last:border-0"
-        >
-          <div class="flex-1">
-            <p class="text-sm font-semibold text-roxo-800">
-              {{ g.nome }}
-              <span
-                v-if="g.totalParcelas"
-                class="ml-1 rounded bg-roxo-50 px-1.5 py-0.5 text-[10px] font-bold text-roxo-600"
-              >
-                {{ g.parcela }}/{{ g.totalParcelas }}
-              </span>
-              <span
-                v-if="g.data > hojeLocalISO()"
-                class="ml-1 rounded bg-amarelo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amarelo-700"
-              >
-                a vencer
-              </span>
-            </p>
-            <p v-if="g.descricao" class="text-xs text-roxo-400">{{ g.descricao }}</p>
-            <p class="text-[11px] text-roxo-300">
-              <span v-if="g.formaPagamento">{{ rotuloFormaPagamento(g.formaPagamento) }}</span>
-              <span v-if="g.totalParcelas && g.valorTotal">
-                · parcelado de {{ formatarMoeda(g.valorTotal) }}
-                <span v-if="g.dataCompra"> em {{ formatarDataCurta(g.dataCompra) }}</span>
-              </span>
-            </p>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="text-sm font-bold text-red-500">-{{ formatarMoeda(g.valor) }}</span>
-            <button class="text-red-400" @click="gastoParaExcluir = g">✕</button>
+    <div class="flex rounded-xl bg-roxo-50 p-1">
+      <button
+        v-for="a in ([['saidas', 'Saídas (gastos)'], ['entradas', 'Entradas']] as const)"
+        :key="a[0]"
+        type="button"
+        class="flex-1 rounded-lg py-2 text-xs font-bold"
+        :class="aba === a[0] ? 'bg-white text-roxo-700 shadow-sm' : 'text-roxo-400'"
+        @click="aba = a[0]"
+      >
+        {{ a[1] }}
+      </button>
+    </div>
+
+    <EntradasCaixa v-if="aba === 'entradas'" @alterou="carregarSaldo" />
+
+    <template v-else>
+      <button
+        class="w-full rounded-xl border-2 border-dashed border-roxo-200 py-3 text-sm font-bold text-roxo-500"
+        @click="abrirNovo"
+      >
+        + Novo gasto
+      </button>
+
+      <p v-if="!gastos.length" class="py-10 text-center text-sm text-roxo-300">
+        Nenhum gasto registrado ainda.
+      </p>
+
+      <div v-for="[dataGrupo, itens] in gastosPorData" :key="dataGrupo" class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-roxo-400">{{ formatarDataCurta(dataGrupo) }}</h2>
+        <div class="overflow-hidden rounded-2xl bg-white shadow-sm">
+          <div
+            v-for="g in itens"
+            :key="g.id"
+            class="flex items-center justify-between border-b border-roxo-50 px-4 py-3 last:border-0"
+          >
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-roxo-800">
+                {{ g.nome }}
+                <span
+                  v-if="g.totalParcelas"
+                  class="ml-1 rounded bg-roxo-50 px-1.5 py-0.5 text-[10px] font-bold text-roxo-600"
+                >
+                  {{ g.parcela }}/{{ g.totalParcelas }}
+                </span>
+                <span
+                  v-if="g.data > hojeLocalISO()"
+                  class="ml-1 rounded bg-amarelo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amarelo-700"
+                >
+                  a vencer
+                </span>
+              </p>
+              <p v-if="g.descricao" class="text-xs text-roxo-400">{{ g.descricao }}</p>
+              <p class="text-[11px] text-roxo-300">
+                <span v-if="g.formaPagamento">{{ rotuloFormaPagamento(g.formaPagamento) }}</span>
+                <span v-if="g.totalParcelas && g.valorTotal">
+                  · parcelado de {{ formatarMoeda(g.valorTotal) }}
+                  <span v-if="g.dataCompra"> em {{ formatarDataCurta(g.dataCompra) }}</span>
+                </span>
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-sm font-bold text-red-500">-{{ formatarMoeda(g.valor) }}</span>
+              <button class="text-red-400" @click="gastoParaExcluir = g">✕</button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
+
+    <UiModal v-if="modalPlanilha" titulo="Planilha do fluxo de caixa" @fechar="modalPlanilha = false">
+      <div class="mb-3 grid grid-cols-2 gap-2">
+        <label class="block min-w-0">
+          <span class="mb-1 block text-[11px] font-semibold text-roxo-400">De</span>
+          <input
+            :value="planilhaInicio"
+            type="date"
+            class="w-full min-w-0 rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
+            @change="aoMudarPlanilhaInicio"
+          />
+        </label>
+        <label class="block min-w-0">
+          <span class="mb-1 block text-[11px] font-semibold text-roxo-400">Até</span>
+          <input
+            :value="planilhaFim"
+            type="date"
+            class="w-full min-w-0 rounded-xl border border-roxo-100 bg-white px-3 py-2 text-sm text-roxo-700 focus:border-roxo-400 focus:outline-none"
+            @change="aoMudarPlanilhaFim"
+          />
+        </label>
+      </div>
+      <p class="mb-4 text-[11px] text-roxo-400">
+        Abas: Resumo (saldo anterior, entradas, vendas, gorjetas, taxas, gastos e saldo final), Movimentações
+        (tudo em ordem de data, com o saldo linha a linha), Entradas, Saídas e Vendas por dia.
+      </p>
+      <p v-if="erroPlanilha" class="mb-3 text-sm font-medium text-red-600">{{ erroPlanilha }}</p>
+      <button
+        class="w-full rounded-xl bg-roxo-700 py-3 text-sm font-bold text-white disabled:opacity-60"
+        :disabled="gerandoPlanilha"
+        @click="baixarPlanilha"
+      >
+        {{ gerandoPlanilha ? 'Gerando...' : 'Baixar planilha (.xlsx)' }}
+      </button>
+    </UiModal>
 
     <UiModal v-if="modalAberto" titulo="Novo gasto" @fechar="modalAberto = false">
       <form class="space-y-3" @submit.prevent="salvar">

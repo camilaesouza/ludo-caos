@@ -256,6 +256,12 @@ async function confirmarExclusao() {
               <p class="text-sm font-semibold text-roxo-800">
                 {{ p.numero ? `#${p.numero}` : 'S/N' }}
                 <span v-if="p.clienteNome" class="font-normal text-roxo-500">· {{ p.clienteNome }}</span>
+                <span
+                  v-if="p.assinanteId"
+                  class="ml-1 rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-green-700"
+                >
+                  assinante
+                </span>
               </p>
               <p class="text-[11px] text-roxo-300">
                 {{ quando(p.fechadoEm) }} · {{ descricaoPagamento(p) }}
@@ -266,6 +272,9 @@ async function confirmarExclusao() {
               <span class="block text-sm font-bold text-roxo-800">{{ formatarMoeda(valor) }}</span>
               <span v-if="temFiltro && valor !== p.total" class="block text-[10px] text-roxo-400">
                 de {{ formatarMoeda(p.total) }}
+              </span>
+              <span v-if="p.gorjeta" class="block text-[10px] font-semibold text-green-600">
+                + {{ formatarMoeda(p.gorjeta) }} gorjeta
               </span>
             </span>
           </button>
@@ -279,6 +288,13 @@ async function confirmarExclusao() {
       @fechar="selecionado = null"
     >
       <p class="text-sm text-roxo-500">{{ selecionado.clienteNome || 'Sem nome' }}</p>
+      <p
+        v-if="selecionado.assinanteId"
+        class="mt-1 inline-block rounded bg-green-50 px-1.5 py-0.5 text-[11px] font-bold text-green-700"
+      >
+        Cliente assinante{{ selecionado.assinanteNome ? ` (${selecionado.assinanteNome})` : '' }} ·
+        {{ formatarPercentualCurto(selecionado.assinanteDesconto || 0) }} de desconto
+      </p>
       <p class="mb-3 text-xs text-roxo-300">
         Encerrado em {{ new Date(selecionado.fechadoEm || 0).toLocaleDateString('pt-BR') }} às {{ hora(selecionado.fechadoEm) }} · {{ descricaoPagamento(selecionado) }}
       </p>
@@ -305,7 +321,7 @@ async function confirmarExclusao() {
           </div>
           <div class="flex items-center justify-between text-xs text-roxo-400">
             <span>
-              Desconto
+              {{ selecionado.assinanteId ? 'Desconto assinante' : 'Desconto' }}
               <template v-if="selecionado.descontoTipo === 'percentual'">({{ formatarPercentual(selecionado.descontoInformado || 0) }})</template>
             </span>
             <span class="text-red-500">-{{ formatarMoeda(selecionado.valorDesconto) }}</span>
@@ -315,6 +331,16 @@ async function confirmarExclusao() {
           <span class="text-sm font-bold text-roxo-700">Total</span>
           <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(selecionado.total) }}</span>
         </div>
+        <template v-if="selecionado.gorjeta">
+          <div class="flex items-center justify-between text-xs text-roxo-400">
+            <span>Gorjeta</span>
+            <span class="font-semibold text-green-600">+{{ formatarMoeda(selecionado.gorjeta) }}</span>
+          </div>
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-roxo-500">Total cobrado</span>
+            <span class="font-bold text-roxo-700">{{ formatarMoeda(selecionado.total + selecionado.gorjeta) }}</span>
+          </div>
+        </template>
         <template v-if="pagamentosDoPedido(selecionado).length > 1">
           <p class="pt-2 text-xs font-semibold text-roxo-500">Pagamento</p>
           <div
@@ -343,7 +369,7 @@ async function confirmarExclusao() {
           </template>
           <div class="flex items-center justify-between text-xs">
             <span class="text-roxo-500">Entrou no caixa</span>
-            <span class="font-bold text-roxo-700">{{ formatarMoeda(selecionado.total - selecionado.valorTaxa) }}</span>
+            <span class="font-bold text-roxo-700">{{ formatarMoeda(selecionado.total + (selecionado.gorjeta || 0) - selecionado.valorTaxa) }}</span>
           </div>
         </template>
       </div>

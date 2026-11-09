@@ -86,3 +86,31 @@ export function pedidoCombinaBusca(pedido: { numero: string; clienteNome: string
   if (!termo) return true
   return normalizarBusca(pedido.numero).includes(termo) || normalizarBusca(pedido.clienteNome).includes(termo)
 }
+
+export function somenteDigitos(texto: string) {
+  return (texto || '').replace(/\D/g, '')
+}
+
+// 12345678901 → 123.456.789-01 (formata o que tiver, enquanto digita).
+export function formatarCPF(texto: string) {
+  const d = somenteDigitos(texto).slice(0, 11)
+  return d
+    .replace(/^(\d{3})(\d)/, '$1.$2')
+    .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2')
+}
+
+// 11987654321 → (11) 98765-4321; 1132654321 → (11) 3265-4321.
+export function formatarTelefone(texto: string) {
+  const d = somenteDigitos(texto).slice(0, 11)
+  if (d.length <= 2) return d.length ? `(${d}` : ''
+  const ddd = d.slice(0, 2)
+  const resto = d.slice(2)
+  const corte = d.length === 11 ? 5 : 4
+  return resto.length > corte ? `(${ddd}) ${resto.slice(0, corte)}-${resto.slice(corte)}` : `(${ddd}) ${resto}`
+}
+
+// 10 → "10%", 7.5 → "7,5%" (sem casas decimais sobrando).
+export function formatarPercentualCurto(v: number) {
+  return `${(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`
+}

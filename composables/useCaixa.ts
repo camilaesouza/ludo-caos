@@ -5,14 +5,32 @@ export function useCaixa() {
   const { $db } = useNuxtApp()
   const { user } = useAuth()
   const { buscarFechadosEntre } = usePedidos()
-  const { buscarEntreDatas } = useGastos()
+  const { buscarEntreDatas, buscarGastosAte } = useGastos()
+  const { buscarEntradasEntre } = useEntradas()
   const { produtos } = useProdutos()
+
+  // Quanto tem em caixa no fim do dia `dataISO`: entradas + vendas (com gorjeta, menos taxas) − gastos,
+  // somando tudo desde o começo.
+  async function saldoAte(dataISO: string) {
+    const { fim } = limitesDoPeriodo(dataISO, dataISO)
+    const [pedidos, gastos, entradas] = await Promise.all([
+      buscarFechadosEntre(0, fim),
+      buscarGastosAte(dataISO),
+      buscarEntradasEntre(null, dataISO)
+    ])
+    const vendas = pedidos.reduce((soma, p) => soma + p.total + (p.gorjeta || 0) - (p.valorTaxa || 0), 0)
+    const saidas = gastos.reduce((soma, g) => soma + g.valor, 0)
+    const aportes = entradas.reduce((soma, e) => soma + e.valor, 0)
+    return arredondarCentavos(aportes + vendas - saidas)
+  }
 
   async function resumoDoPeriodo(inicioISO: string, fimISO: string) {
     const { inicio, fim } = limitesDoPeriodo(inicioISO, fimISO)
-    const [pedidos, gastos] = await Promise.all([
+    const [pedidos, gastos, entradas, saldoAnterior] = await Promise.all([
       buscarFechadosEntre(inicio, fim),
-      buscarEntreDatas(inicioISO, fimISO)
+      buscarEntreDatas(inicioISO, fimISO),
+      buscarEntradasEntre(inicioISO, fimISO),
+      saldoAte(somarDias(inicioISO, -1))
     ])
 
     const formasPagamento: Record<FormaPagamento, number> = {
@@ -28,8 +46,10 @@ export function useCaixa() {
     let totalVendas = 0
     let totalTaxas = 0
     let totalDescontos = 0
+    let totalGorjetas = 0
     for (const p of pedidos) {
       totalVendas += p.total
+      totalGorjetas += p.gorjeta || 0
       totalTaxas += p.valorTaxa || 0
       totalDescontos += p.valorDesconto || 0
       // Pedido pago em mais de uma forma soma cada parte na sua forma.
@@ -42,6 +62,9 @@ export function useCaixa() {
     }
 
     const totalGastos = gastos.reduce((soma, g) => soma + g.valor, 0)
+    const totalEntradas = arredondarCentavos(entradas.reduce((soma, e) => soma + e.valor, 0))
+    // Resultado das vendas do período (sem contar entradas de dinheiro de fora).
+    const totalLiquido = arredondarCentavos(totalVendas + totalGorjetas - totalTaxas - totalGastos)
 
     const vendasPorCategoria = agruparPorCategoria(
       pedidos,
@@ -51,13 +74,18 @@ export function useCaixa() {
     return {
       pedidos,
       gastos,
+      entradas,
       vendasPorCategoria,
       totalVendas,
       totalPedidos: pedidos.length,
       totalGastos,
       totalTaxas: arredondarCentavos(totalTaxas),
       totalDescontos: arredondarCentavos(totalDescontos),
-      totalLiquido: arredondarCentavos(totalVendas - totalTaxas - totalGastos),
+      totalGorjetas: arredondarCentavos(totalGorjetas),
+      totalEntradas,
+      totalLiquido,
+      saldoAnterior,
+      saldoFinal: arredondarCentavos(saldoAnterior + totalEntradas + totalLiquido),
       formasPagamento,
       taxasPorForma
     }
@@ -73,6 +101,9 @@ export function useCaixa() {
       totalGastos: resumo.totalGastos,
       totalTaxas: resumo.totalTaxas,
       totalDescontos: resumo.totalDescontos,
+      totalGorjetas: resumo.totalGorjetas,
+      totalEntradas: resumo.totalEntradas,
+      saldoFinal: resumo.saldoFinal,
       totalLiquido: resumo.totalLiquido,
       formasPagamento: resumo.formasPagamento,
       vendasPorCategoria: resumo.vendasPorCategoria,
@@ -93,5 +124,5 @@ export function useCaixa() {
     await deleteDoc(doc($db as any, 'fechamentosCaixa', id))
   }
 
-  return { resumoDoPeriodo, registrarFechamento, historicoFechamentos, removerFechamento }
+  return { saldoAte, resumoDoPeriodo, registrarFechamento, historicoFechamentos, removerFechamento }
 }

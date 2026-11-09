@@ -104,6 +104,38 @@ export interface Pedido {
   // Formas usadas no pagamento. Pedidos antigos não têm: valem formaPagamento/bandeira/parcelas.
   // Com mais de uma forma, `formaPagamento` guarda a de maior valor e `valorTaxa` a soma das taxas.
   pagamentos?: PagamentoPedido[]
+  // Gorjeta dada pelo cliente no fechamento. Fica fora de `total` (que é só a venda),
+  // mas entra nos pagamentos: o cliente paga total + gorjeta.
+  gorjeta?: number
+  // Cliente assinante: o desconto do plano é sugerido ao fechar o pedido.
+  assinanteId?: string | null
+  assinanteNome?: string | null
+  assinanteDesconto?: number | null
+}
+
+export interface Assinante {
+  id: string
+  nome: string
+  cpf: string // só dígitos
+  telefone: string // só dígitos
+  desconto: number // % de desconto nos pedidos
+  plano: string
+  // Desativado: some da escolha nos pedidos, mas continua cadastrado. Ausente = ativo.
+  ativo?: boolean
+  createdAt: number
+}
+
+// Dinheiro que entra no caixa sem ser venda: saldo de antes de usar o sistema, aportes etc.
+export type TipoEntrada = 'saldo_anterior' | 'aporte' | 'outro'
+
+export interface EntradaCaixa {
+  id: string
+  tipo: TipoEntrada
+  descricao: string
+  valor: number
+  data: string // YYYY-MM-DD
+  createdAt: number
+  criadoPor: string
 }
 
 export type TipoDesconto = 'percentual' | 'valor'
@@ -151,6 +183,9 @@ export interface FechamentoCaixa {
   totalGastos: number
   totalTaxas?: number
   totalDescontos?: number
+  totalGorjetas?: number
+  totalEntradas?: number
+  saldoFinal?: number
   totalLiquido: number
   formasPagamento: Record<FormaPagamento, number>
   vendasPorCategoria?: CategoriaVendida[]

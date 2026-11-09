@@ -1,12 +1,15 @@
 <script setup lang="ts">
 const { pedidosAbertos, subscribe, criarPedido, sugerirNumero } = usePedidos()
+const { assinantes, subscribe: subscribeAssinantes } = useAssinantes()
 subscribe()
+subscribeAssinantes()
 
 const modalAberto = ref(false)
 const numero = ref('')
 // Número sugerido pela sequência; se o campo continuar com ele, o número é reservado ao abrir.
 const numeroSugerido = ref('')
 const clienteNome = ref('')
+const assinanteId = ref('')
 const salvando = ref(false)
 const erro = ref('')
 const busca = ref('')
@@ -19,6 +22,7 @@ async function abrirNovo() {
   numero.value = ''
   numeroSugerido.value = ''
   clienteNome.value = ''
+  assinanteId.value = ''
   erro.value = ''
   modalAberto.value = true
   try {
@@ -37,9 +41,11 @@ async function salvar() {
   try {
     const digitado = numero.value.trim()
     const automatico = !digitado || digitado === numeroSugerido.value
+    const assinante = assinantes.value.find((a) => a.id === assinanteId.value)
     const { id } = await criarPedido({
       numero: automatico ? null : digitado,
-      clienteNome: clienteNome.value.trim()
+      clienteNome: clienteNome.value.trim(),
+      assinante: assinante ? { id: assinante.id, nome: assinante.nome, desconto: assinante.desconto } : null
     })
     modalAberto.value = false
     await navigateTo(`/pedidos/${id}`)
@@ -100,6 +106,12 @@ function tempoAberto(createdAt: number) {
           <span class="text-[10px] text-roxo-300">{{ tempoAberto(p.createdAt) }}</span>
         </div>
         <p class="mt-2 truncate text-sm font-semibold text-roxo-800">{{ p.clienteNome || 'Cliente' }}</p>
+        <span
+          v-if="p.assinanteId"
+          class="inline-block rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-green-700"
+        >
+          Assinante · {{ formatarPercentualCurto(p.assinanteDesconto || 0) }}
+        </span>
         <p class="text-xs text-roxo-400">{{ p.itens.length }} {{ p.itens.length === 1 ? 'item' : 'itens' }}</p>
         <p v-if="p.abertoPor" class="truncate text-[10px] text-roxo-300">aberto por {{ nomeCurto(p.abertoPor) }}</p>
         <p class="mt-2 text-base font-extrabold text-roxo-700">{{ formatarMoeda(p.total) }}</p>
@@ -117,14 +129,7 @@ function tempoAberto(createdAt: number) {
             :placeholder="numeroSugerido ? `Automático (${numeroSugerido})` : 'Automático'"
           />
         </div>
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-roxo-500">Nome do cliente (opcional)</label>
-          <input
-            v-model="clienteNome"
-            class="w-full rounded-xl border border-roxo-100 px-3 py-2.5 text-sm focus:border-roxo-400 focus:outline-none"
-            placeholder="Ex: Maria"
-          />
-        </div>
+        <PedidoCliente v-model:cliente-nome="clienteNome" v-model:assinante-id="assinanteId" />
         <p class="text-xs text-roxo-300">
           O número vem preenchido com o próximo da sequência. Se usar comanda, troque pelo número dela.
         </p>

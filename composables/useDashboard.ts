@@ -34,6 +34,7 @@ export function useDashboard() {
 
     const totalGastosPeriodo = gastos.reduce((soma, g) => soma + g.valor, 0)
     const totalTaxasPeriodo = pedidos.reduce((soma, p) => soma + (p.valorTaxa || 0), 0)
+    const totalGorjetasPeriodo = pedidos.reduce((soma, p) => soma + (p.gorjeta || 0), 0)
 
     // Só faz sentido mostrar "hoje" quando o período inclui o dia de hoje.
     const hoje = hojeLocalISO()
@@ -51,7 +52,8 @@ export function useDashboard() {
       totalEmPedidos: totalPedidosPeriodo,
       totalGastos: totalGastosPeriodo,
       totalTaxas: totalTaxasPeriodo,
-      totalLiquido: totalPedidosPeriodo - totalTaxasPeriodo - totalGastosPeriodo,
+      totalGorjetas: totalGorjetasPeriodo,
+      totalLiquido: totalPedidosPeriodo + totalGorjetasPeriodo - totalTaxasPeriodo - totalGastosPeriodo,
       agrupamento,
       serie: Array.from(serieMapa.entries()).map(([data, total]) => ({ data, total })),
       produtosMaisVendidos: produtosMaisVendidos(pedidos),

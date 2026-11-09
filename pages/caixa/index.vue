@@ -65,26 +65,53 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
 <template>
   <div class="space-y-5">
     <div class="space-y-3">
-      <h1 class="text-xl font-extrabold text-roxo-800">Fechamento de caixa</h1>
+      <h1 class="text-xl font-extrabold text-roxo-800">Caixa</h1>
       <UiFiltroPeriodo v-model:inicio="inicio" v-model:fim="fim" />
     </div>
 
     <div v-if="carregando" class="py-10 text-center text-sm text-roxo-300">Carregando...</div>
 
     <template v-else-if="resumo">
+      <div class="rounded-2xl bg-roxo-700 p-4 text-white shadow-sm">
+        <p class="text-xs font-medium text-amarelo-300">Saldo em caixa no fim {{ sufixo }}</p>
+        <p class="mt-1 text-2xl font-extrabold" :class="{ 'text-red-300': resumo.saldoFinal < 0 }">
+          {{ formatarMoeda(resumo.saldoFinal) }}
+        </p>
+        <div class="mt-3 space-y-1 border-t border-roxo-500 pt-2 text-xs">
+          <div class="flex justify-between text-roxo-100">
+            <span>Saldo anterior</span>
+            <span class="font-semibold">{{ formatarMoeda(resumo.saldoAnterior) }}</span>
+          </div>
+          <div class="flex justify-between text-roxo-100">
+            <span>Entradas {{ sufixo }}</span>
+            <span class="font-semibold">+{{ formatarMoeda(resumo.totalEntradas) }}</span>
+          </div>
+          <div class="flex justify-between text-roxo-100">
+            <span>Líquido das vendas {{ sufixo }}</span>
+            <span class="font-semibold">{{ resumo.totalLiquido < 0 ? '' : '+' }}{{ formatarMoeda(resumo.totalLiquido) }}</span>
+          </div>
+        </div>
+      </div>
+
       <div class="grid grid-cols-2 gap-3">
-        <UiStatTile class="col-span-2" :label="`Líquido ${sufixo}`" :value="formatarMoeda(resumo.totalLiquido)" destaque />
+        <UiStatTile class="col-span-2" :label="`Líquido ${sufixo}`" :value="formatarMoeda(resumo.totalLiquido)" />
         <UiStatTile label="Em pedidos" :value="formatarMoeda(resumo.totalVendas)" />
+        <UiStatTile label="Gorjetas" :value="formatarMoeda(resumo.totalGorjetas)" />
         <UiStatTile label="Taxas de cartão" :value="formatarMoeda(resumo.totalTaxas)" />
         <UiStatTile label="Gastos" :value="formatarMoeda(resumo.totalGastos)" />
         <UiStatTile label="Pedidos fechados" :value="String(resumo.totalPedidos)" />
+        <UiStatTile label="Entradas" :value="formatarMoeda(resumo.totalEntradas)" />
       </div>
+      <p class="-mt-2 px-1 text-[11px] text-roxo-400">
+        Líquido = pedidos + gorjetas − taxas de cartão − gastos. Entradas (saldo anterior, aportes) entram só no saldo.
+      </p>
       <p v-if="resumo.totalDescontos" class="-mt-2 px-1 text-[11px] text-roxo-400">
         {{ formatarMoeda(resumo.totalDescontos) }} em descontos já abatidos de “Em pedidos”. Os valores por produto abaixo são sem desconto.
       </p>
 
       <div class="rounded-2xl bg-white p-4 shadow-sm">
         <h2 class="mb-3 text-sm font-bold text-roxo-700">Por forma de pagamento</h2>
+        <p v-if="resumo.totalGorjetas" class="-mt-2 mb-3 text-[11px] text-roxo-400">Valores já incluem as gorjetas.</p>
         <div class="space-y-2 text-sm">
           <div v-for="f in FORMAS_PAGAMENTO" :key="f.valor" class="flex justify-between">
             <span class="text-roxo-500">{{ f.rotulo }}</span>
@@ -140,6 +167,20 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         </ul>
       </div>
 
+      <div v-if="resumo.entradas.length" class="rounded-2xl bg-white p-4 shadow-sm">
+        <h2 class="mb-3 text-sm font-bold text-roxo-700">Entradas {{ sufixo }}</h2>
+        <ul class="divide-y divide-roxo-50">
+          <li v-for="e in resumo.entradas" :key="e.id" class="flex items-center justify-between py-2 text-sm">
+            <span class="text-roxo-700">
+              {{ e.descricao || rotuloTipoEntrada(e.tipo) }}
+              <span class="text-[11px] text-roxo-400">{{ rotuloTipoEntrada(e.tipo) }}</span>
+              <span v-if="!umDia" class="block text-[10px] text-roxo-300">{{ formatarDataBR(e.data) }}</span>
+            </span>
+            <span class="font-bold text-green-600">+{{ formatarMoeda(e.valor) }}</span>
+          </li>
+        </ul>
+      </div>
+
       <div v-if="!umDia" class="rounded-2xl border border-dashed border-roxo-200 p-4 text-center text-xs text-roxo-400">
         O fechamento é registrado por dia. Selecione um único dia para registrar.
       </div>
@@ -157,7 +198,7 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         />
         <button
           class="w-full rounded-xl bg-roxo-700 py-3 text-sm font-bold text-white disabled:opacity-60"
-          :disabled="registrando || (!resumo.pedidos.length && !resumo.gastos.length)"
+          :disabled="registrando || (!resumo.pedidos.length && !resumo.gastos.length && !resumo.entradas.length)"
           @click="fechar"
         >
           {{ registrando ? 'Registrando...' : jaFechado ? 'Atualizar fechamento do dia' : 'Registrar fechamento do dia' }}

@@ -44,6 +44,11 @@ service cloud.firestore {
       allow read: if logado();
     }
 
+    // Assinantes: vendedor consulta para marcar o pedido; só admin cadastra.
+    match /assinantes/{id} {
+      allow read: if logado();
+    }
+
     // Cada um lê o próprio cadastro, para o app saber o papel.
     match /usuarios/{uid} {
       allow read: if logado() && request.auth.uid == uid;

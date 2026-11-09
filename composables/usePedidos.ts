@@ -26,6 +26,22 @@ export interface FechamentoPedido {
   pagamentos: PagamentoFechamento[]
   descontoTipo: TipoDesconto | null
   descontoInformado: number | null
+  gorjeta: number | null
+}
+
+export interface AssinantePedido {
+  id: string
+  nome: string
+  desconto: number
+}
+
+// Campos gravados no pedido para o assinante (cópia do desconto: mudar o plano depois não altera o pedido).
+function camposAssinante(assinante: AssinantePedido | null) {
+  return {
+    assinanteId: assinante?.id || null,
+    assinanteNome: assinante?.nome || null,
+    assinanteDesconto: assinante ? assinante.desconto : null
+  }
 }
 
 const pedidosAbertos = () => useState<Pedido[]>('pedidosAbertos', () => [])
@@ -105,7 +121,7 @@ export function usePedidos() {
 
   // Sem `numero`, usa a numeração automática. Com um número digitado (ex: número da comanda),
   // usa ele como está, sem mexer na sequência automática.
-  async function criarPedido(data: { numero?: string | null; clienteNome: string }) {
+  async function criarPedido(data: { numero?: string | null; clienteNome: string; assinante?: AssinantePedido | null }) {
     const digitado = (data.numero || '').trim().replace(/^#/, '')
     if (digitado && abertos.value.some((p) => p.numero.trim() === digitado)) {
       throw new Error(`Já existe um pedido aberto com o número ${digitado}.`)
@@ -114,6 +130,7 @@ export function usePedidos() {
     const ref = await addDoc(collection($db as any, 'pedidos'), {
       numero,
       clienteNome: data.clienteNome || '',
+      ...camposAssinante(data.assinante || null),
       status: 'aberto',
       itens: [],
       total: 0,
@@ -124,6 +141,13 @@ export function usePedidos() {
       fechadoPor: null
     })
     return { id: ref.id, numero }
+  }
+
+  async function atualizarCliente(pedidoId: string, clienteNome: string, assinante: AssinantePedido | null) {
+    await updateDoc(doc($db as any, 'pedidos', pedidoId), {
+      clienteNome: clienteNome || '',
+      ...camposAssinante(assinante)
+    })
   }
 
   // Grava os itens do pedido e ajusta o estoque dos produtos na mesma operação.
@@ -177,9 +201,12 @@ export function usePedidos() {
     const subtotal = calcularTotal(pedido?.itens || [])
     const valorDesconto = calcularDesconto(subtotal, dados.descontoTipo, dados.descontoInformado)
     const total = arredondarCentavos(subtotal - valorDesconto)
+    const gorjeta = arredondarCentavos(Math.max(0, dados.gorjeta || 0))
+    // O cliente paga a venda mais a gorjeta; é esse valor que se divide entre as formas.
+    const cobrado = arredondarCentavos(total + gorjeta)
     if (!dados.pagamentos.length) throw new Error('Escolha a forma de pagamento.')
     // Taxa e desconto ficam gravados no pedido: mudar a taxa depois não altera vendas já fechadas.
-    let restante = total
+    let restante = cobrado
     const pagamentos: PagamentoPedido[] = dados.pagamentos.map((pg, i) => {
       const ultimo = i === dados.pagamentos.length - 1
       const valor = ultimo ? arredondarCentavos(restante) : arredondarCentavos(pg.valor || 0)
@@ -198,7 +225,7 @@ export function usePedidos() {
       }
     })
     if (pagamentos.length > 1 && pagamentos.some((pg) => pg.valor <= 0)) {
-      throw new Error('Os valores das formas de pagamento precisam somar o total do pedido.')
+      throw new Error('Os valores das formas de pagamento precisam somar o total a receber.')
     }
     // Campos de uma forma só ficam com a de maior valor, para quem ainda lê o formato antigo.
     const principal = pagamentos.reduce((a, b) => (b.valor > a.valor ? b : a))
@@ -215,7 +242,8 @@ export function usePedidos() {
       descontoInformado: valorDesconto ? dados.descontoInformado : 0,
       valorDesconto,
       total,
-      taxaPercentual: unica ? principal.taxaPercentual : total ? arredondarCentavos((valorTaxa / total) * 100) : 0,
+      gorjeta,
+      taxaPercentual: unica ? principal.taxaPercentual : cobrado ? arredondarCentavos((valorTaxa / cobrado) * 100) : 0,
       valorTaxa,
       fechadoEm: Date.now(),
       fechadoPor: user.value?.email || ''
@@ -262,7 +290,8 @@ export function usePedidos() {
       subtotal: calcularTotal(pedido.itens),
       descontoTipo: null,
       descontoInformado: 0,
-      valorDesconto: 0
+      valorDesconto: 0,
+      gorjeta: 0
     })
   }
 
@@ -284,6 +313,7 @@ export function usePedidos() {
     pedidosAbertos: abertos,
     subscribe,
     criarPedido,
+    atualizarCliente,
     sugerirNumero,
     adicionarItem,
     definirQuantidade,

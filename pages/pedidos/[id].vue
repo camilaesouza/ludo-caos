@@ -4,13 +4,16 @@ import type { FormaPagamento, ItemPedido, Produto, TipoDesconto, TipoPreco } fro
 const route = useRoute()
 const id = route.params.id as string
 
-const { subscribe, pedidoPorId, adicionarItem, definirQuantidade, removerItem, fecharPedido, removerPedido } = usePedidos()
+const { subscribe, pedidoPorId, adicionarItem, definirQuantidade, removerItem, fecharPedido, removerPedido, atualizarCliente } =
+  usePedidos()
+const { assinantes, subscribe: subscribeAssinantes } = useAssinantes()
 const { produtos, ativos, subscribe: subscribeProdutos } = useProdutos()
 const { user } = useAuth()
 const { taxas, subscribe: subscribeTaxas, calcularTaxa } = useTaxas()
 subscribe()
 subscribeProdutos()
 subscribeTaxas()
+subscribeAssinantes()
 
 const pedido = pedidoPorId(id)
 
@@ -36,6 +39,7 @@ const novaLinha = (formaPagamento: FormaPagamento = 'dinheiro'): LinhaPagamento 
 const pagamentos = ref<LinhaPagamento[]>([novaLinha()])
 const descontoTipo = ref<TipoDesconto>('percentual')
 const descontoInformado = ref<number | null>(null)
+const gorjeta = ref<number | null>(null)
 const dividirConta = ref(false)
 const pessoas = ref<number | null>(2)
 const erroFechar = ref('')
@@ -45,9 +49,18 @@ const valorDesconto = computed(() =>
   calcularDesconto(pedido.value?.total || 0, descontoTipo.value, descontoInformado.value)
 )
 const totalComDesconto = computed(() => arredondarCentavos((pedido.value?.total || 0) - valorDesconto.value))
+// O cliente paga a venda com desconto mais a gorjeta.
+const valorGorjeta = computed(() => arredondarCentavos(Math.max(0, gorjeta.value || 0)))
+const totalAReceber = computed(() => arredondarCentavos(totalComDesconto.value + valorGorjeta.value))
+// Sugestão de gorjeta de 10% sobre o valor com desconto.
+const gorjetaSugerida = computed(() => arredondarCentavos(totalComDesconto.value * 0.1))
+// Desconto do assinante gravado no pedido, para avisar e sugerir no fechamento.
+const descontoAssinante = computed(() =>
+  pedido.value?.assinanteId ? pedido.value.assinanteDesconto ?? DESCONTO_PADRAO_ASSINANTE : null
+)
 // Valor de cada forma: nas anteriores, o que foi digitado; na última, o que sobrar.
 const valoresPagamento = computed(() => {
-  let restante = totalComDesconto.value
+  let restante = totalAReceber.value
   return pagamentos.value.map((pg, i) => {
     const valor = arredondarCentavos(i === pagamentos.value.length - 1 ? restante : pg.valor || 0)
     restante -= valor
@@ -59,7 +72,7 @@ const taxasPagamento = computed(() =>
 )
 const resumoTaxa = computed(() => {
   const valorTaxa = arredondarCentavos(taxasPagamento.value.reduce((soma, t) => soma + t.valorTaxa, 0))
-  return { valorTaxa, liquido: arredondarCentavos(totalComDesconto.value - valorTaxa) }
+  return { valorTaxa, liquido: arredondarCentavos(totalAReceber.value - valorTaxa) }
 })
 
 function adicionarForma() {
@@ -76,9 +89,9 @@ function removerForma(indice: number) {
 const divisao = computed(() => {
   const n = Math.floor(Number(pessoas.value) || 0)
   if (n < 2) return null
-  const centavos = Math.round(totalComDesconto.value * 100)
+  const centavos = Math.round(totalAReceber.value * 100)
   const porPessoa = Math.floor(centavos / n) / 100
-  const ultima = arredondarCentavos(totalComDesconto.value - porPessoa * (n - 1))
+  const ultima = arredondarCentavos(totalAReceber.value - porPessoa * (n - 1))
   return { n, porPessoa, ultima }
 })
 
@@ -117,11 +130,11 @@ const itensRestantes = computed(() =>
     .filter((r) => r.restante > 0)
 )
 
-// O desconto do pedido é repartido na proporção do valor dos itens de cada pessoa.
+// Desconto e gorjeta do pedido são repartidos na proporção do valor dos itens de cada pessoa.
 function valorDosItens(itens: { preco: number; quantidade: number }[]) {
   const subtotal = itens.reduce((soma, i) => soma + i.preco * i.quantidade, 0)
   const total = pedido.value?.total || 0
-  return arredondarCentavos(total ? (subtotal * totalComDesconto.value) / total : 0)
+  return arredondarCentavos(total ? (subtotal * totalAReceber.value) / total : 0)
 }
 
 // Valor de cada pessoa que já confirmou. Quando tudo foi pago, a última fica com a sobra dos centavos.
@@ -129,12 +142,12 @@ const valoresPagos = computed(() => {
   const valores = pagamentosPorItens.value.map(valorDosItens)
   if (valores.length && !itensRestantes.value.length) {
     const outros = valores.slice(0, -1).reduce((soma, v) => soma + v, 0)
-    valores[valores.length - 1] = arredondarCentavos(totalComDesconto.value - outros)
+    valores[valores.length - 1] = arredondarCentavos(totalAReceber.value - outros)
   }
   return valores
 })
 const faltaPagar = computed(() =>
-  arredondarCentavos(totalComDesconto.value - valoresPagos.value.reduce((soma, v) => soma + v, 0))
+  arredondarCentavos(totalAReceber.value - valoresPagos.value.reduce((soma, v) => soma + v, 0))
 )
 
 const itensSelecionados = computed<ItemPago[]>(() =>
@@ -186,7 +199,9 @@ function resumoItensPagos(itens: ItemPago[]) {
 function abrirFechar() {
   pagamentos.value = [novaLinha()]
   descontoTipo.value = 'percentual'
-  descontoInformado.value = null
+  // Assinante já entra com o desconto do plano (dá para mudar ou tirar).
+  descontoInformado.value = descontoAssinante.value || null
+  gorjeta.value = null
   // Se já tem gente que pagou pelos itens, mantém a divisão para continuar de onde parou.
   if (!pagamentosPorItens.value.length) {
     dividirConta.value = false
@@ -331,7 +346,8 @@ async function confirmarFechamento() {
         ? descontoTipo.value === 'percentual'
           ? Math.min(descontoInformado.value!, 100)
           : descontoInformado.value
-        : null
+        : null,
+      gorjeta: valorGorjeta.value || null
     })
     modalFecharAberto.value = false
     await navigateTo('/pedidos')
@@ -339,6 +355,36 @@ async function confirmarFechamento() {
     erroFechar.value = e?.message || 'Não foi possível fechar o pedido.'
   } finally {
     fechando.value = false
+  }
+}
+
+// Editar nome do cliente / assinante do pedido aberto.
+const modalClienteAberto = ref(false)
+const editClienteNome = ref('')
+const editAssinanteId = ref('')
+const salvandoCliente = ref(false)
+
+function abrirEditarCliente() {
+  editClienteNome.value = pedido.value?.clienteNome || ''
+  editAssinanteId.value = pedido.value?.assinanteId || ''
+  modalClienteAberto.value = true
+}
+
+async function salvarCliente() {
+  salvandoCliente.value = true
+  try {
+    const a = assinantes.value.find((x) => x.id === editAssinanteId.value)
+    // Mantém o desconto gravado se o assinante continua o mesmo e não está mais na lista.
+    const mesmo = editAssinanteId.value && editAssinanteId.value === pedido.value?.assinanteId
+    const assinante = a
+      ? { id: a.id, nome: a.nome, desconto: a.desconto }
+      : mesmo
+        ? { id: pedido.value!.assinanteId!, nome: pedido.value!.assinanteNome || '', desconto: pedido.value!.assinanteDesconto ?? DESCONTO_PADRAO_ASSINANTE }
+        : null
+    await atualizarCliente(id, editClienteNome.value.trim(), assinante)
+    modalClienteAberto.value = false
+  } finally {
+    salvandoCliente.value = false
   }
 }
 
@@ -364,7 +410,16 @@ async function confirmarExclusao() {
         <h1 class="text-xl font-extrabold text-roxo-800">
           {{ pedido.numero ? `Pedido #${pedido.numero}` : 'Pedido' }}
         </h1>
-        <p class="text-sm text-roxo-400">{{ pedido.clienteNome || 'Sem nome' }}</p>
+        <button type="button" class="text-left text-sm text-roxo-400" @click="abrirEditarCliente">
+          {{ pedido.clienteNome || 'Sem nome' }}
+          <span class="ml-1 text-[11px] font-semibold text-roxo-300 underline">editar</span>
+        </button>
+        <p
+          v-if="descontoAssinante !== null"
+          class="mt-1 inline-block rounded bg-green-50 px-1.5 py-0.5 text-[11px] font-bold text-green-700"
+        >
+          Cliente assinante · {{ formatarPercentualCurto(descontoAssinante) }} de desconto
+        </p>
         <p v-if="pedido.abertoPor" class="text-[11px] text-roxo-300">aberto por {{ nomeCurto(pedido.abertoPor) }}</p>
       </div>
       <div class="flex flex-col items-end gap-1">
@@ -586,6 +641,11 @@ async function confirmarExclusao() {
     <UiModal v-if="modalFecharAberto" titulo="Fechar pedido" @fechar="modalFecharAberto = false">
       <p class="mb-4 text-[11px] text-roxo-300">Fechando como {{ user?.email }}</p>
 
+      <div v-if="descontoAssinante !== null" class="mb-4 rounded-xl bg-green-50 px-3 py-2 text-xs text-green-700">
+        <span class="font-bold">Cliente assinante{{ pedido.assinanteNome ? ` (${pedido.assinanteNome})` : '' }}</span>:
+        desconto de {{ formatarPercentualCurto(descontoAssinante) }} já aplicado abaixo.
+      </div>
+
       <label class="mb-1 block text-xs font-semibold text-roxo-500">Desconto (opcional)</label>
       <div class="mb-4 flex items-center gap-2">
         <div class="flex shrink-0 rounded-xl bg-roxo-50 p-1">
@@ -616,8 +676,21 @@ async function confirmarExclusao() {
         </div>
       </div>
 
+      <label class="mb-1 flex items-center justify-between text-xs font-semibold text-roxo-500">
+        Gorjeta (opcional)
+        <button
+          v-if="gorjetaSugerida > 0"
+          type="button"
+          class="text-[11px] font-bold text-roxo-400 underline"
+          @click="gorjeta = gorjetaSugerida"
+        >
+          10% = {{ formatarMoeda(gorjetaSugerida) }}
+        </button>
+      </label>
+      <UiInputMoeda v-model="gorjeta" class="mb-4" placeholder="R$ 0,00" />
+
       <div class="mb-4 space-y-1 rounded-xl bg-roxo-50 p-3 text-sm">
-        <div v-if="valorDesconto" class="flex justify-between text-roxo-500">
+        <div v-if="valorDesconto || valorGorjeta" class="flex justify-between text-roxo-500">
           <span>Subtotal</span>
           <span>{{ formatarMoeda(pedido.total) }}</span>
         </div>
@@ -628,9 +701,13 @@ async function confirmarExclusao() {
           </span>
           <span class="font-semibold text-red-500">-{{ formatarMoeda(valorDesconto) }}</span>
         </div>
+        <div v-if="valorGorjeta" class="flex justify-between text-roxo-500">
+          <span>Gorjeta</span>
+          <span class="font-semibold text-green-600">+{{ formatarMoeda(valorGorjeta) }}</span>
+        </div>
         <div class="flex justify-between">
           <span class="font-bold text-roxo-700">Total a receber</span>
-          <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(totalComDesconto) }}</span>
+          <span class="text-lg font-extrabold text-roxo-800">{{ formatarMoeda(totalAReceber) }}</span>
         </div>
       </div>
 
@@ -841,7 +918,9 @@ async function confirmarExclusao() {
               <span class="text-roxo-500">Falta pagar</span>
               <span class="font-extrabold text-roxo-800">{{ formatarMoeda(faltaPagar) }}</span>
             </div>
-            <p v-if="valorDesconto" class="mt-1 text-[11px] text-roxo-300">Valores já com o desconto repartido.</p>
+            <p v-if="valorDesconto || valorGorjeta" class="mt-1 text-[11px] text-roxo-300">
+              Valores já com {{ valorDesconto && valorGorjeta ? 'desconto e gorjeta repartidos' : valorDesconto ? 'o desconto repartido' : 'a gorjeta repartida' }}.
+            </p>
           </template>
         </template>
       </div>
@@ -854,6 +933,19 @@ async function confirmarExclusao() {
       >
         {{ fechando ? 'Fechando...' : 'Confirmar fechamento' }}
       </button>
+    </UiModal>
+
+    <UiModal v-if="modalClienteAberto" titulo="Cliente do pedido" @fechar="modalClienteAberto = false">
+      <form class="space-y-3" @submit.prevent="salvarCliente">
+        <PedidoCliente v-model:cliente-nome="editClienteNome" v-model:assinante-id="editAssinanteId" />
+        <button
+          type="submit"
+          :disabled="salvandoCliente"
+          class="w-full rounded-xl bg-roxo-700 py-3 text-sm font-bold text-white disabled:opacity-60"
+        >
+          {{ salvandoCliente ? 'Salvando...' : 'Salvar' }}
+        </button>
+      </form>
     </UiModal>
 
     <UiConfirmModal
