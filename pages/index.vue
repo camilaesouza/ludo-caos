@@ -66,6 +66,7 @@ const maiorValorSerie = computed(() => {
         <UiStatTile label="Em pedidos" :value="formatarMoeda(dados.totalEmPedidos)" />
         <UiStatTile label="Gastos" :value="formatarMoeda(dados.totalGastos)" />
         <UiStatTile v-if="dados.totalGorjetas" label="Gorjetas" :value="formatarMoeda(dados.totalGorjetas)" />
+        <UiStatTile v-if="dados.totalAssinaturas" label="Assinaturas" :value="formatarMoeda(dados.totalAssinaturas)" />
         <UiStatTile label="Pedidos fechados" :value="String(dados.totalPedidos)" />
         <UiStatTile
           label="Ticket médio"

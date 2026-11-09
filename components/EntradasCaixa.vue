@@ -56,7 +56,7 @@ const total = computed(() => arredondarCentavos(entradas.value.reduce((s, e) => 
 
     <p class="px-1 text-[11px] text-roxo-400">
       Dinheiro que entra no caixa sem ser venda, como o saldo que sobrou antes de usar o sistema ou um aporte.
-      As vendas dos pedidos já entram sozinhas.
+      As vendas dos pedidos já entram sozinhas, e as mensalidades dos assinantes entram ao marcar como recebidas em Assinantes → Cobranças.
     </p>
 
     <p v-if="!entradas.length" class="py-6 text-center text-sm text-roxo-300">Nenhuma entrada registrada ainda.</p>

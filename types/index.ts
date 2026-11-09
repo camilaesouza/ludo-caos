@@ -122,7 +122,50 @@ export interface Assinante {
   plano: string
   // Desativado: some da escolha nos pedidos, mas continua cadastrado. Ausente = ativo.
   ativo?: boolean
+  // Cobrança da assinatura: entra sozinha no fluxo de caixa, a cada `periodicidade`,
+  // no `diaPagamento`, enquanto estiver na vigência (início até fim; sem fim = sem prazo).
+  valorAssinatura?: number | null
+  periodicidade?: Periodicidade
+  diaPagamento?: number | null // 1 a 31
+  inicioVigencia?: string | null // YYYY-MM-DD
+  fimVigencia?: string | null // YYYY-MM-DD
   createdAt: number
+}
+
+export type Periodicidade = 'mensal' | 'trimestral' | 'semestral' | 'anual'
+
+// Registro gravado de uma cobrança de assinatura: recebida (entra no caixa na data do
+// pagamento) ou dispensada (não vai ser cobrada). ID = `${assinanteId}_${referencia}`.
+export type StatusRegistroAssinatura = 'pago' | 'dispensado'
+
+export interface RegistroCobranca {
+  id: string
+  assinanteId: string
+  nome: string // cópia do assinante, para o caixa não depender do cadastro
+  plano: string
+  referencia: string // YYYY-MM-DD: vencimento da cobrança
+  status: StatusRegistroAssinatura
+  valor: number // valor recebido (0 se dispensada)
+  dataPagamento: string | null // YYYY-MM-DD em que o dinheiro entrou
+  // Forma principal (a de maior valor). As formas usadas ficam em `pagamentos`, como nos pedidos;
+  // registros antigos não têm: valem formaPagamento/valor.
+  formaPagamento: FormaPagamento | null
+  pagamentos?: PagamentoPedido[]
+  valorTaxa?: number // soma das taxas da maquininha
+  observacao: string
+  registradoPor: string
+  createdAt: number
+}
+
+export type StatusCobranca = 'pendente' | 'atrasada' | StatusRegistroAssinatura
+
+// Cobrança esperada pela vigência, junto com o registro (se já foi recebida/dispensada).
+export interface CobrancaAssinatura {
+  assinanteId: string
+  referencia: string
+  valorPrevisto: number
+  status: StatusCobranca
+  registro: RegistroCobranca | null
 }
 
 // Dinheiro que entra no caixa sem ser venda: saldo de antes de usar o sistema, aportes etc.
@@ -184,6 +227,7 @@ export interface FechamentoCaixa {
   totalTaxas?: number
   totalDescontos?: number
   totalGorjetas?: number
+  totalAssinaturas?: number
   totalEntradas?: number
   saldoFinal?: number
   totalLiquido: number

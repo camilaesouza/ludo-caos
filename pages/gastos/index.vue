@@ -243,7 +243,7 @@ const gastosPorData = computed(() => {
         {{ saldoHoje === null ? '...' : formatarMoeda(saldoHoje) }}
       </p>
       <p class="mt-1 text-[11px] text-roxo-200">
-        Entradas + vendas (com gorjetas, menos taxas de cartão) − gastos, desde o começo.
+        Entradas + assinaturas + vendas (com gorjetas, menos taxas de cartão) − gastos, desde o começo.
         <NuxtLink to="/caixa" class="font-semibold underline">Ver por período</NuxtLink>
       </p>
     </div>

@@ -1,5 +1,5 @@
 import type { Workbook } from 'exceljs'
-import type { EntradaCaixa, FormaPagamento, Gasto, Pedido, Produto, UnidadeMedida } from '~/types'
+import type { Assinante, EntradaCaixa, FormaPagamento, Gasto, Pedido, RegistroCobranca, Produto, UnidadeMedida } from '~/types'
 
 type CategoriaDoProduto = (id: string) => string | undefined
 
@@ -304,6 +304,7 @@ export interface DadosFluxo {
   pedidos: Pedido[]
   gastos: Gasto[]
   entradas: EntradaCaixa[]
+  assinaturas: RegistroCobranca[] // mensalidades recebidas no período
   saldoAnterior: number
 }
 
@@ -362,10 +363,13 @@ export async function baixarPlanilhaFluxo(dados: DadosFluxo, inicioISO: string, 
   const totalEntradas = soma(dados.entradas.map((e) => e.valor))
   const totalVendas = soma(listaDias.map((d) => d.vendas))
   const totalGorjetas = soma(listaDias.map((d) => d.gorjetas))
-  const totalTaxas = soma(listaDias.map((d) => d.taxas))
+  const taxasVendas = soma(listaDias.map((d) => d.taxas))
+  const taxasAssinaturas = soma(dados.assinaturas.map((a) => a.valorTaxa || 0))
+  const totalTaxas = arredondarCentavos(taxasVendas + taxasAssinaturas)
   const totalDescontos = soma(listaDias.map((d) => d.descontos))
   const totalGastos = soma(dados.gastos.map((g) => g.valor))
-  const liquido = arredondarCentavos(totalVendas + totalGorjetas - totalTaxas - totalGastos)
+  const totalAssinaturas = soma(dados.assinaturas.map((a) => a.valor))
+  const liquido = arredondarCentavos(totalVendas + totalGorjetas + totalAssinaturas - totalTaxas - totalGastos)
   const saldoFinal = arredondarCentavos(dados.saldoAnterior + totalEntradas + liquido)
 
   // 1. Resumo
@@ -380,18 +384,22 @@ export async function baixarPlanilhaFluxo(dados: DadosFluxo, inicioISO: string, 
   resumo.addRow({ item: '(+) Entradas (saldo anterior, aportes etc.)', valor: totalEntradas })
   resumo.addRow({ item: '(+) Vendas em pedidos (já com descontos)', valor: totalVendas })
   resumo.addRow({ item: '(+) Gorjetas', valor: totalGorjetas })
+  resumo.addRow({ item: '(+) Assinaturas recebidas', valor: totalAssinaturas })
   resumo.addRow({ item: '(−) Taxas de cartão', valor: -totalTaxas })
   resumo.addRow({ item: '(−) Gastos', valor: -totalGastos })
-  linhaDestaque(resumo, { item: 'Líquido das vendas (vendas + gorjetas − taxas − gastos)', valor: liquido })
+  linhaDestaque(resumo, { item: 'Líquido (vendas + gorjetas + assinaturas − taxas − gastos)', valor: liquido })
   linhaDestaque(resumo, { item: 'Saldo no fim do período', valor: saldoFinal })
   resumo.addRow([])
   resumo.addRow({ item: 'Pedidos fechados' }).getCell('valor').value = dados.pedidos.length
   resumo.getRow(resumo.rowCount).getCell('valor').numFmt = '0'
   resumo.addRow({ item: 'Descontos dados (já abatidos das vendas)', valor: totalDescontos })
   resumo.addRow([])
-  resumo.addRow({ item: 'Recebido por forma de pagamento (com gorjetas)' }).font = { bold: true, color: { argb: ROXO } }
+  resumo.addRow({ item: 'Recebido por forma de pagamento (com gorjetas e assinaturas)' }).font = { bold: true, color: { argb: ROXO } }
   for (const forma of FORMAS) {
-    const valor = soma(listaDias.map((d) => d.formas[forma]))
+    const valor = soma([
+      ...listaDias.map((d) => d.formas[forma]),
+      ...dados.assinaturas.flatMap((a) => pagamentosDoRegistro(a).filter((pg) => pg.formaPagamento === forma).map((pg) => pg.valor))
+    ])
     if (forma === 'cartao' && !valor) continue
     resumo.addRow({ item: `   ${rotuloFormaPagamento(forma)}`, valor })
   }
@@ -418,6 +426,26 @@ export async function baixarPlanilhaFluxo(dados: DadosFluxo, inicioISO: string, 
   const movimentos: Movimento[] = []
   for (const e of dados.entradas) {
     movimentos.push({ data: e.data, ordem: 0, tipo: rotuloTipoEntrada(e.tipo), descricao: e.descricao || rotuloTipoEntrada(e.tipo), forma: '', valor: e.valor })
+  }
+  for (const a of dados.assinaturas) {
+    movimentos.push({
+      data: a.dataPagamento || a.referencia,
+      ordem: 0,
+      tipo: 'Assinatura',
+      descricao: [a.nome, a.plano, `venc. ${formatarDataBR(a.referencia)}`].filter(Boolean).join(' · '),
+      forma: descricaoFormas(pagamentosDoRegistro(a)),
+      valor: a.valor
+    })
+    if (a.valorTaxa) {
+      movimentos.push({
+        data: a.dataPagamento || a.referencia,
+        ordem: 4,
+        tipo: 'Taxas de cartão',
+        descricao: `Taxa da maquininha · assinatura ${a.nome}`,
+        forma: '',
+        valor: -a.valorTaxa
+      })
+    }
   }
   for (const d of listaDias) {
     movimentos.push({ data: d.data, ordem: 1, tipo: 'Vendas', descricao: `Vendas do dia · ${d.pedidos} ${d.pedidos === 1 ? 'pedido' : 'pedidos'}`, forma: '', valor: d.vendas })
@@ -473,6 +501,36 @@ export async function baixarPlanilhaFluxo(dados: DadosFluxo, inicioISO: string, 
     })
   ent.addRow([])
   linhaDestaque(ent, { data: 'Total', valor: totalEntradas })
+
+  // 3b. Assinaturas
+  const ass = adicionarAba(livro, 'Assinaturas', [
+    { header: 'Data do pagamento', key: 'data', width: 16 },
+    { header: 'Assinante', key: 'nome', width: 30 },
+    { header: 'Plano', key: 'plano', width: 22 },
+    { header: 'Vencimento', key: 'referencia', width: 12 },
+    { header: 'Forma de pagamento', key: 'forma', width: 34 },
+    { header: 'Observação', key: 'obs', width: 26 },
+    { header: 'Valor', key: 'valor', width: 14 },
+    { header: 'Taxa da maquininha', key: 'taxa', width: 17 },
+    { header: 'Registrado por', key: 'por', width: 22 }
+  ])
+  formatarMoedaColuna(ass, ['valor', 'taxa'])
+  dados.assinaturas.forEach((a, i) => {
+    const linha = ass.addRow({
+      data: formatarDataBR(a.dataPagamento || a.referencia),
+      nome: a.nome,
+      plano: a.plano,
+      referencia: formatarDataBR(a.referencia),
+      forma: descricaoFormas(pagamentosDoRegistro(a)),
+      obs: a.observacao,
+      valor: a.valor,
+      taxa: a.valorTaxa || null,
+      por: a.registradoPor
+    })
+    if (i % 2 === 1) pintar(linha, CINZA)
+  })
+  ass.addRow([])
+  linhaDestaque(ass, { data: 'Total', valor: totalAssinaturas })
 
   // 4. Saídas
   const sai = adicionarAba(livro, 'Saídas', [
@@ -549,10 +607,128 @@ export async function baixarPlanilhaFluxo(dados: DadosFluxo, inicioISO: string, 
       vendas: totalVendas,
       descontos: totalDescontos,
       gorjetas: totalGorjetas,
-      taxas: totalTaxas,
+      taxas: taxasVendas,
       formas: { dinheiro: totalFormas('dinheiro'), credito: totalFormas('credito'), debito: totalFormas('debito'), pix: totalFormas('pix'), cartao: totalFormas('cartao') }
     })
   )
 
   await baixar(livro, `fluxo_caixa_${sufixoPeriodo(inicioISO, fimISO)}.xlsx`)
+}
+
+// ---------- Assinantes ----------
+
+const COLUNAS_ASSINANTES: Coluna[] = [
+  { header: 'Nome', key: 'nome', width: 28 },
+  { header: 'CPF', key: 'cpf', width: 16 },
+  { header: 'Telefone', key: 'telefone', width: 17 },
+  { header: 'Tipo de assinatura', key: 'plano', width: 22 },
+  { header: 'Desconto nos pedidos', key: 'desconto', width: 12 },
+  { header: 'Valor da assinatura', key: 'valor', width: 18 },
+  { header: 'Cobrança', key: 'periodicidade', width: 12 },
+  { header: 'Dia do pagamento', key: 'dia', width: 10 },
+  { header: 'Início da vigência', key: 'inicio', width: 15 },
+  { header: 'Fim da vigência', key: 'fim', width: 15 },
+  { header: 'Situação', key: 'situacao', width: 18 },
+  { header: 'Próxima cobrança', key: 'proxima', width: 15 },
+  { header: 'Cobranças em atraso', key: 'atrasoQtd', width: 12 },
+  { header: 'Valor em atraso', key: 'atraso', width: 15 },
+  { header: 'Total recebido', key: 'recebido', width: 16 }
+]
+
+function situacaoAssinante(a: Assinante) {
+  if (!assinanteAtivo(a)) return 'Inativo'
+  if (vigenciaEncerrada(a)) return 'Vigência encerrada'
+  return 'Ativo'
+}
+
+// Aba com o cadastro de todos os assinantes e aba com todas as cobranças até hoje.
+export async function baixarPlanilhaAssinantes(assinantes: Assinante[], registros: RegistroCobranca[]) {
+  const { livro, aba } = await novaPlanilha('Assinantes', COLUNAS_ASSINANTES)
+  formatarMoedaColuna(aba, ['valor', 'atraso', 'recebido'])
+  aba.getColumn('desconto').numFmt = '0.##"%"'
+  const hoje = hojeLocalISO()
+  const ordenados = [...assinantes].sort((a, b) => a.nome.localeCompare(b.nome))
+  ordenados.forEach((a, i) => {
+    const recebido = registros
+      .filter((r) => r.assinanteId === a.id && r.status === 'pago')
+      .reduce((s, r) => s + r.valor, 0)
+    const atrasadas = cobrancasEmAtraso(a, registros)
+    const proxima = proximaCobranca(a)
+    const linha = aba.addRow({
+      nome: a.nome,
+      cpf: a.cpf ? formatarCPF(a.cpf) : '',
+      telefone: a.telefone ? formatarTelefone(a.telefone) : '',
+      plano: a.plano || '',
+      desconto: a.desconto,
+      valor: a.valorAssinatura || null,
+      periodicidade: a.valorAssinatura ? rotuloPeriodicidade(a.periodicidade) : '',
+      dia: a.diaPagamento || null,
+      inicio: a.inicioVigencia ? formatarDataBR(a.inicioVigencia) : '',
+      fim: a.fimVigencia ? formatarDataBR(a.fimVigencia) : a.inicioVigencia ? 'Sem prazo' : '',
+      situacao: situacaoAssinante(a),
+      proxima: proxima ? formatarDataBR(proxima) : '',
+      atrasoQtd: atrasadas.length || null,
+      atraso: atrasadas.length ? arredondarCentavos(atrasadas.reduce((s, c) => s + c.valorPrevisto, 0)) : null,
+      recebido: arredondarCentavos(recebido)
+    })
+    if (i % 2 === 1) pintar(linha, CINZA)
+    const situacao = linha.getCell('situacao')
+    if (situacao.value !== 'Ativo') situacao.font = { bold: true, color: { argb: 'FFDC2626' } }
+    if (atrasadas.length) linha.getCell('atraso').font = { bold: true, color: { argb: 'FFDC2626' } }
+  })
+  aba.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: COLUNAS_ASSINANTES.length } }
+  aba.addRow([])
+  const ativos = ordenados.filter((a) => situacaoAssinante(a) === 'Ativo')
+  linhaDestaque(aba, { nome: `Ativos: ${ativos.length} de ${ordenados.length}` })
+  // Quanto entra por mês com os ativos (planos trimestrais etc. divididos por mês).
+  const porMes = ativos.reduce((s, a) => {
+    const meses = PERIODICIDADES.find((p) => p.valor === (a.periodicidade || 'mensal'))!.meses
+    return s + (a.valorAssinatura || 0) / meses
+  }, 0)
+  linhaDestaque(aba, { nome: 'Receita mensal dos ativos (média por mês)', valor: arredondarCentavos(porMes) })
+
+  // Todas as cobranças até hoje, com a situação de cada uma.
+  const pag = adicionarAba(livro, 'Cobranças', [
+    { header: 'Vencimento', key: 'referencia', width: 12 },
+    { header: 'Assinante', key: 'nome', width: 30 },
+    { header: 'Plano', key: 'plano', width: 22 },
+    { header: 'Situação', key: 'status', width: 13 },
+    { header: 'Valor previsto', key: 'previsto', width: 15 },
+    { header: 'Valor recebido', key: 'valor', width: 15 },
+    { header: 'Data do pagamento', key: 'data', width: 16 },
+    { header: 'Forma de pagamento', key: 'forma', width: 34 },
+    { header: 'Taxa da maquininha', key: 'taxa', width: 17 },
+    { header: 'Observação', key: 'obs', width: 26 }
+  ])
+  formatarMoedaColuna(pag, ['previsto', 'valor', 'taxa'])
+  const cobrancas = ordenados
+    .flatMap((a) => cobrancasDoAssinante(a, registros, hoje).map((c) => ({ a, c })))
+    .sort((x, y) => x.c.referencia.localeCompare(y.c.referencia) || x.a.nome.localeCompare(y.a.nome))
+  cobrancas.forEach(({ a, c }, i) => {
+    const linha = pag.addRow({
+      referencia: formatarDataBR(c.referencia),
+      nome: a.nome,
+      plano: a.plano || '',
+      status: ROTULO_STATUS_COBRANCA[c.status],
+      previsto: c.valorPrevisto || null,
+      valor: c.registro?.status === 'pago' ? c.registro.valor : null,
+      data: c.registro?.dataPagamento ? formatarDataBR(c.registro.dataPagamento) : '',
+      forma: c.registro?.status === 'pago' ? descricaoFormas(pagamentosDoRegistro(c.registro)) : '',
+      taxa: c.registro?.valorTaxa || null,
+      obs: c.registro?.observacao || ''
+    })
+    if (i % 2 === 1) pintar(linha, CINZA)
+    if (c.status === 'atrasada') linha.getCell('status').font = { bold: true, color: { argb: 'FFDC2626' } }
+  })
+  pag.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 10 } }
+  pag.addRow([])
+  const recebidas = cobrancas.filter(({ c }) => c.status === 'pago')
+  const atrasadas = cobrancas.filter(({ c }) => c.status === 'atrasada')
+  linhaDestaque(pag, { referencia: 'Recebido', valor: arredondarCentavos(recebidas.reduce((s, { c }) => s + (c.registro?.valor || 0), 0)) })
+  linhaDestaque(pag, {
+    referencia: `Em atraso (${atrasadas.length})`,
+    previsto: arredondarCentavos(atrasadas.reduce((s, { c }) => s + c.valorPrevisto, 0))
+  })
+
+  await baixar(livro, `assinantes_${hoje}.xlsx`)
 }

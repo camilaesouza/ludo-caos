@@ -82,7 +82,10 @@ function descricaoForma(p: Pick<PagamentoPedido, 'formaPagamento' | 'bandeira' |
 
 // Uma forma: "Pix". Várias: "Dinheiro R$ 15,00 + Cartão crédito · Visa · 1x R$ 35,00".
 export function descricaoPagamento(p: Pedido) {
-  const pagamentos = pagamentosDoPedido(p)
+  return descricaoFormas(pagamentosDoPedido(p))
+}
+
+export function descricaoFormas(pagamentos: PagamentoPedido[]) {
   if (!pagamentos.length) return rotuloFormaPagamento(null)
   if (pagamentos.length === 1) return descricaoForma(pagamentos[0])
   return pagamentos.map((pg) => `${descricaoForma(pg)} ${formatarMoeda(pg.valor)}`).join(' + ')

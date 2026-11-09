@@ -87,7 +87,7 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
             <span class="font-semibold">+{{ formatarMoeda(resumo.totalEntradas) }}</span>
           </div>
           <div class="flex justify-between text-roxo-100">
-            <span>Líquido das vendas {{ sufixo }}</span>
+            <span>Líquido {{ sufixo }} (vendas, gorjetas e assinaturas)</span>
             <span class="font-semibold">{{ resumo.totalLiquido < 0 ? '' : '+' }}{{ formatarMoeda(resumo.totalLiquido) }}</span>
           </div>
         </div>
@@ -101,9 +101,10 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         <UiStatTile label="Gastos" :value="formatarMoeda(resumo.totalGastos)" />
         <UiStatTile label="Pedidos fechados" :value="String(resumo.totalPedidos)" />
         <UiStatTile label="Entradas" :value="formatarMoeda(resumo.totalEntradas)" />
+        <UiStatTile class="col-span-2" label="Assinaturas recebidas" :value="formatarMoeda(resumo.totalAssinaturas)" />
       </div>
       <p class="-mt-2 px-1 text-[11px] text-roxo-400">
-        Líquido = pedidos + gorjetas − taxas de cartão − gastos. Entradas (saldo anterior, aportes) entram só no saldo.
+        Líquido = pedidos + gorjetas + assinaturas − taxas de cartão − gastos. Entradas (saldo anterior, aportes) entram só no saldo.
       </p>
       <p v-if="resumo.totalDescontos" class="-mt-2 px-1 text-[11px] text-roxo-400">
         {{ formatarMoeda(resumo.totalDescontos) }} em descontos já abatidos de “Em pedidos”. Os valores por produto abaixo são sem desconto.
@@ -111,7 +112,9 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
 
       <div class="rounded-2xl bg-white p-4 shadow-sm">
         <h2 class="mb-3 text-sm font-bold text-roxo-700">Por forma de pagamento</h2>
-        <p v-if="resumo.totalGorjetas" class="-mt-2 mb-3 text-[11px] text-roxo-400">Valores já incluem as gorjetas.</p>
+        <p v-if="resumo.totalGorjetas || resumo.totalAssinaturas" class="-mt-2 mb-3 text-[11px] text-roxo-400">
+          Valores já incluem {{ [resumo.totalGorjetas ? 'as gorjetas' : '', resumo.totalAssinaturas ? 'as assinaturas recebidas' : ''].filter(Boolean).join(' e ') }}.
+        </p>
         <div class="space-y-2 text-sm">
           <div v-for="f in FORMAS_PAGAMENTO" :key="f.valor" class="flex justify-between">
             <span class="text-roxo-500">{{ f.rotulo }}</span>
@@ -181,6 +184,29 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         </ul>
       </div>
 
+      <div v-if="resumo.assinaturas.length" class="rounded-2xl bg-white p-4 shadow-sm">
+        <h2 class="mb-3 text-sm font-bold text-roxo-700">Assinaturas recebidas {{ sufixo }}</h2>
+        <ul class="divide-y divide-roxo-50">
+          <li
+            v-for="a in resumo.assinaturas"
+            :key="a.id"
+            class="flex items-center justify-between py-2 text-sm"
+          >
+            <span class="text-roxo-700">
+              {{ a.nome }}
+              <span v-if="a.plano" class="text-[11px] text-roxo-400">{{ a.plano }}</span>
+              <span class="block text-[10px] text-roxo-300">
+                <template v-if="!umDia">recebida {{ formatarDataBR(a.dataPagamento || a.referencia) }} · </template>
+                ref. venc. {{ formatarDataBR(a.referencia) }}
+                · {{ descricaoFormas(pagamentosDoRegistro(a)) }}
+                <template v-if="a.valorTaxa"> · taxa -{{ formatarMoeda(a.valorTaxa) }}</template>
+              </span>
+            </span>
+            <span class="font-bold text-green-600">+{{ formatarMoeda(a.valor) }}</span>
+          </li>
+        </ul>
+      </div>
+
       <div v-if="!umDia" class="rounded-2xl border border-dashed border-roxo-200 p-4 text-center text-xs text-roxo-400">
         O fechamento é registrado por dia. Selecione um único dia para registrar.
       </div>
@@ -198,7 +224,7 @@ const sufixo = computed(() => (umDia.value ? 'do dia' : 'do período'))
         />
         <button
           class="w-full rounded-xl bg-roxo-700 py-3 text-sm font-bold text-white disabled:opacity-60"
-          :disabled="registrando || (!resumo.pedidos.length && !resumo.gastos.length && !resumo.entradas.length)"
+          :disabled="registrando || (!resumo.pedidos.length && !resumo.gastos.length && !resumo.entradas.length && !resumo.assinaturas.length)"
           @click="fechar"
         >
           {{ registrando ? 'Registrando...' : jaFechado ? 'Atualizar fechamento do dia' : 'Registrar fechamento do dia' }}

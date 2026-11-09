@@ -7,13 +7,16 @@ export function useDashboard() {
   const { buscarFechadosEntre } = usePedidos()
   const { buscarEntreDatas } = useGastos()
   const { produtos } = useProdutos()
+  const { buscarRecebidasEntre } = useAssinantes()
 
   async function carregarPeriodo(inicioISO: string, fimISO: string) {
     const { inicio, fim } = limitesDoPeriodo(inicioISO, fimISO)
-    const [pedidos, gastos] = await Promise.all([
+    const [pedidos, gastos, recebidas] = await Promise.all([
       buscarFechadosEntre(inicio, fim),
-      buscarEntreDatas(inicioISO, fimISO)
+      buscarEntreDatas(inicioISO, fimISO),
+      buscarRecebidasEntre(inicioISO, fimISO)
     ])
+    const totalAssinaturas = recebidas.reduce((s, r) => s + r.valor, 0)
 
     const dias: string[] = []
     for (let d = inicioISO; d <= fimISO; d = somarDias(d, 1)) dias.push(d)
@@ -33,7 +36,8 @@ export function useDashboard() {
     }
 
     const totalGastosPeriodo = gastos.reduce((soma, g) => soma + g.valor, 0)
-    const totalTaxasPeriodo = pedidos.reduce((soma, p) => soma + (p.valorTaxa || 0), 0)
+    const totalTaxasPeriodo =
+      pedidos.reduce((soma, p) => soma + (p.valorTaxa || 0), 0) + recebidas.reduce((soma, r) => soma + (r.valorTaxa || 0), 0)
     const totalGorjetasPeriodo = pedidos.reduce((soma, p) => soma + (p.gorjeta || 0), 0)
 
     // Só faz sentido mostrar "hoje" quando o período inclui o dia de hoje.
@@ -53,7 +57,8 @@ export function useDashboard() {
       totalGastos: totalGastosPeriodo,
       totalTaxas: totalTaxasPeriodo,
       totalGorjetas: totalGorjetasPeriodo,
-      totalLiquido: totalPedidosPeriodo + totalGorjetasPeriodo - totalTaxasPeriodo - totalGastosPeriodo,
+      totalAssinaturas,
+      totalLiquido: totalPedidosPeriodo + totalGorjetasPeriodo + totalAssinaturas - totalTaxasPeriodo - totalGastosPeriodo,
       agrupamento,
       serie: Array.from(serieMapa.entries()).map(([data, total]) => ({ data, total })),
       produtosMaisVendidos: produtosMaisVendidos(pedidos),
